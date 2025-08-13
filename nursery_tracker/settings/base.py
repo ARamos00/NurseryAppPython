@@ -1,0 +1,181 @@
+from pathlib import Path
+import os
+import environ
+
+# -----------------------------------------------------------------------------
+# Paths & Env
+# -----------------------------------------------------------------------------
+# Project root (directory containing manage.py)
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = ROOT_DIR  # conventional name used by Django
+
+# Initialize env and read .env if present
+env = environ.Env(
+    DEBUG=(bool, False),
+)
+env_file = BASE_DIR / ".env"
+if env_file.exists():
+    environ.Env.read_env(str(env_file))
+
+# -----------------------------------------------------------------------------
+# Core
+# -----------------------------------------------------------------------------
+SECRET_KEY = env("SECRET_KEY", default="dev-insecure-change-me")
+DEBUG = env.bool("DEBUG", False)
+
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["127.0.0.1", "localhost"])
+CSRF_TRUSTED_ORIGINS = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=["http://127.0.0.1:8000", "http://localhost:8000"],
+)
+
+# -----------------------------------------------------------------------------
+# Applications
+# -----------------------------------------------------------------------------
+INSTALLED_APPS = [
+    # Django apps
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+
+    # Third-party
+    "rest_framework",
+    "django_filters",
+    "drf_spectacular",
+
+    # Local apps
+    "accounts",
+    "core",
+    "nursery",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "nursery_tracker.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "nursery_tracker.wsgi.application"
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+DATABASES = {
+    "default": env.db(
+        "DATABASE_URL",
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    )
+}
+
+# -----------------------------------------------------------------------------
+# Password validation
+# -----------------------------------------------------------------------------
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+# -----------------------------------------------------------------------------
+# Internationalization
+# -----------------------------------------------------------------------------
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_TZ = True
+
+# -----------------------------------------------------------------------------
+# Static/Media
+# -----------------------------------------------------------------------------
+STATIC_URL = "static/"
+STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# -----------------------------------------------------------------------------
+# DRF & API Schema
+# -----------------------------------------------------------------------------
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.OrderingFilter",
+        "rest_framework.filters.SearchFilter",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 25,
+
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # Safe, production-friendly defaults; can be overridden via env
+        "user": env("DRF_THROTTLE_RATE_USER", default="200/min"),
+        "anon": env("DRF_THROTTLE_RATE_ANON", default="50/min"),
+        "wizard-seed": "30/min",
+    },
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Nursery Tracker API",
+    "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
+    "VERSION": "0.1.0",
+
+    # Nice-to-haves for local dev
+    "SERVERS": [
+        {"url": "http://127.0.0.1:8000", "description": "Local Dev"},
+    ],
+    "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
+    "LICENSE": {"name": "MIT"},
+    # Keep auth state when you refresh Swagger UI
+    "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
+}
+
+
+# -----------------------------------------------------------------------------
+# Security defaults (safe baseline; prod hardening in prod.py)
+# -----------------------------------------------------------------------------
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+X_FRAME_OPTIONS = "DENY"
+
+# -----------------------------------------------------------------------------
+# Auth model
+# -----------------------------------------------------------------------------
+AUTH_USER_MODEL = "accounts.User"

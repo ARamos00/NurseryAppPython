@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / compiled files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+venv/
+env/
+.env/
+*/site-packages/
+
+# Database
+*.sqlite3
+*.db
+*.bak
+
+# Media and Static files
+/media/
+/static_collected/
+staticfiles/
+
+# Logs
+*.log
+logs/
+
+# Development specific files
+.DS_Store
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Environment variables
+.env
+.flaskenv
+
+# Other temporary files
+tmp/
+celerybeat.pid
+celeryd.pid
