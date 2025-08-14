@@ -4,6 +4,7 @@ Modular API package for Nursery.
 Exports:
 - CRUD ViewSets (viewsets.py)
 - Wizard endpoints (wizard_seed.py)
+- Label endpoints (labels.py)
 """
 
 from .viewsets import (
@@ -15,6 +16,7 @@ from .viewsets import (
     EventViewSet,
 )
 from .wizard_seed import WizardSeedViewSet
+from .labels import LabelViewSet
 
 __all__ = [
     # CRUD
@@ -26,4 +28,6 @@ __all__ = [
     "EventViewSet",
     # Wizard
     "WizardSeedViewSet",
+    # Labels
+    "LabelViewSet",
 ]

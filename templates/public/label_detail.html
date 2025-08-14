@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Nursery Label</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    .card { max-width: 680px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1.25rem; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+    .meta { color: #6b7280; font-size: 0.9rem; }
+    h1 { margin: 0 0 0.25rem 0; font-size: 1.25rem; }
+    .row { display: grid; grid-template-columns: 180px 1fr; gap: 0.5rem 1rem; margin-top: 0.75rem; }
+    .label { color: #6b7280 }
+    .value { color: #111827 }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; background: #eef2ff; color: #3730a3; font-size: 0.8rem; }
+    .muted { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    {% if status != "ok" %}
+      <h1>Label not found</h1>
+      <p class="muted">This label has been revoked or never existed.</p>
+    {% else %}
+      <h1>Nursery Label <span class="badge">{{ kind|title }}</span></h1>
+      <div class="meta">Token prefix: {{ token_prefix }}</div>
+
+      {% if kind == "plant" %}
+        <div class="row">
+          <div class="label">Taxon</div><div class="value">{{ taxon }}</div>
+          <div class="label">Status</div><div class="value">{{ status_text }}</div>
+          <div class="label">Acquired on</div><div class="value">{{ acquired_on }}</div>
+          {% if last_event %}
+            <div class="label">Last event</div>
+            <div class="value">{{ last_event.get_event_type_display }} on {{ last_event.happened_at }}</div>
+          {% endif %}
+        </div>
+      {% elif kind == "batch" %}
+        <div class="row">
+          <div class="label">Taxon</div><div class="value">{{ taxon }}</div>
+          <div class="label">Material</div><div class="value">{{ material }}</div>
+          <div class="label">Method</div><div class="value">{{ method }}</div>
+          <div class="label">Status</div><div class="value">{{ status_text }}</div>
+          <div class="label">Started on</div><div class="value">{{ started_on }}</div>
+          <div class="label">Quantity</div><div class="value">{{ quantity_started }}</div>
+          {% if last_event %}
+            <div class="label">Last event</div>
+            <div class="value">{{ last_event.get_event_type_display }} on {{ last_event.happened_at }}</div>
+          {% endif %}
+        </div>
+      {% elif kind == "material" %}
+        <div class="row">
+          <div class="label">Taxon</div><div class="value">{{ taxon }}</div>
+          <div class="label">Type</div><div class="value">{{ type_text }}</div>
+          {% if lot_code %}<div class="label">Lot</div><div class="value">{{ lot_code }}</div>{% endif %}
+        </div>
+      {% else %}
+        <p class="muted">Unsupported label type.</p>
+      {% endif %}
+    {% endif %}
+    <p class="muted">© Nursery Tracker</p>
+  </div>
+</body>
+</html>

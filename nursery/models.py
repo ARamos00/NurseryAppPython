@@ -1,12 +1,13 @@
 from django.conf import settings
 from django.core.validators import MinValueValidator
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
-from django.core.exceptions import ValidationError   # add this
 
 from core.models import OwnedModel
 
+# ---- existing domain models ----
 
 class Taxon(OwnedModel):
     scientific_name = models.CharField(max_length=200)
@@ -199,12 +200,8 @@ class Event(OwnedModel):
 
     def clean(self):
         super().clean()
-        # Enforce exactly one target set at the model layer
         if self.batch_id and self.plant_id:
-            # use django.core.exceptions.ValidationError
             raise ValidationError("Choose either a batch or a plant, not both.")
-
-        # Enforce same owner alignment
         owner_id = self.user_id
         if self.batch_id and self.batch.user_id != owner_id:
             raise ValidationError("Event.user must match the selected batch owner.")
@@ -214,3 +211,63 @@ class Event(OwnedModel):
     def __str__(self) -> str:
         target = f"batch {self.batch_id}" if self.batch_id else f"plant {self.plant_id}"
         return f"{self.get_event_type_display()} @ {self.happened_at:%Y-%m-%d %H:%M} → {target}"
+
+
+# ---- Phase 2a: Labels & Tokens (QR) ----
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+
+
+class Label(OwnedModel):
+    """
+    A perpetual label attached to a user-owned target (Plant, PropagationBatch, or PlantMaterial).
+    Exactly one active token at a time (managed at the application level).
+    """
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("content_type", "object_id")
+
+    active_token = models.OneToOneField(
+        "LabelToken",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="is_active_for",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "content_type", "object_id"],
+                name="uniq_label_per_user_target",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "content_type", "object_id"]),
+        ]
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"Label<{self.id}> for {self.content_type.model}:{self.object_id}"
+
+
+class LabelToken(models.Model):
+    """
+    A public token for a label. We store only SHA-256 of the raw token; raw value is never persisted.
+    """
+    label = models.ForeignKey(Label, on_delete=models.CASCADE, related_name="tokens")
+    token_hash = models.CharField(max_length=64, unique=True)
+    prefix = models.CharField(max_length=12)  # first characters of the raw token for support
+    created_at = models.DateTimeField(auto_now_add=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["token_hash"]),
+            models.Index(fields=["created_at"]),
+        ]
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        state = "revoked" if self.revoked_at else "active"
+        return f"LabelToken<{self.prefix}> ({state}) for label {self.label_id}"

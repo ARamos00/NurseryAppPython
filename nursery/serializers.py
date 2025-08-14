@@ -5,6 +5,8 @@ from .models import (
     PropagationBatch,
     Plant,
     Event,
+    Label,
+    LabelToken,
 )
 
 
@@ -91,3 +93,78 @@ class EventSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Selected plant does not belong to the current user.")
 
         return attrs
+
+
+# ---- Phase 2a: Labels ----
+
+class LabelTargetField(serializers.Field):
+    """
+    {"type": "plant"|"batch"|"material", "id": <int>}
+    Serializes to the same shape. Validates ownership.
+    """
+    default_error_messages = {
+        "invalid": "Expected an object with 'type' and 'id'.",
+        "unknown_type": "Unknown target type.",
+        "not_found": "Target not found.",
+        "forbidden": "Target does not belong to the current user.",
+    }
+
+    _type_map = {
+        "plant": Plant,
+        "batch": PropagationBatch,
+        "material": PlantMaterial,
+    }
+
+    def to_representation(self, value):
+        model = type(value)
+        for k, v in self._type_map.items():
+            if v is model:
+                return {"type": k, "id": value.pk}
+        return {"type": "unknown", "id": None}
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or "type" not in data or "id" not in data:
+            self.fail("invalid")
+        target_type = data["type"]
+        pk = data["id"]
+        Model = self._type_map.get(target_type)
+        if not Model:
+            self.fail("unknown_type")
+        try:
+            obj = Model.objects.get(pk=pk)
+        except Model.DoesNotExist:
+            self.fail("not_found")
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False) or obj.user_id != user.id:
+            self.fail("forbidden")
+        return obj
+
+
+class LabelSerializer(serializers.ModelSerializer):
+    # Do not set source="target"; DRF infers it by default. This avoids assertion errors.
+    target = LabelTargetField()
+    active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Label
+        fields = ["id", "target", "active", "created_at", "updated_at", "user"]
+        read_only_fields = ["id", "created_at", "updated_at", "user", "active"]
+
+    def get_active(self, obj: Label) -> bool:
+        return bool(obj.active_token_id)
+
+
+class LabelCreateSerializer(serializers.ModelSerializer):
+    """
+    Used for create and rotate responses — returns raw token once.
+    """
+    # Do not set source="target" here either.
+    target = LabelTargetField()
+    token = serializers.CharField(read_only=True)
+    public_url = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Label
+        fields = ["id", "target", "token", "public_url", "created_at", "updated_at", "user"]
+        read_only_fields = ["id", "token", "public_url", "created_at", "updated_at", "user"]

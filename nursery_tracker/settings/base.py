@@ -5,11 +5,9 @@ import environ
 # -----------------------------------------------------------------------------
 # Paths & Env
 # -----------------------------------------------------------------------------
-# Project root (directory containing manage.py)
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-BASE_DIR = ROOT_DIR  # conventional name used by Django
+BASE_DIR = ROOT_DIR
 
-# Initialize env and read .env if present
 env = environ.Env(
     DEBUG=(bool, False),
 )
@@ -33,7 +31,6 @@ CSRF_TRUSTED_ORIGINS = env.list(
 # Applications
 # -----------------------------------------------------------------------------
 INSTALLED_APPS = [
-    # Django apps
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -145,10 +142,10 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        # Safe, production-friendly defaults; can be overridden via env
         "user": env("DRF_THROTTLE_RATE_USER", default="200/min"),
         "anon": env("DRF_THROTTLE_RATE_ANON", default="50/min"),
         "wizard-seed": "30/min",
+        "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="60/min"),
     },
 }
 
@@ -156,20 +153,16 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Nursery Tracker API",
     "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
     "VERSION": "0.1.0",
-
-    # Nice-to-haves for local dev
     "SERVERS": [
         {"url": "http://127.0.0.1:8000", "description": "Local Dev"},
     ],
     "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
     "LICENSE": {"name": "MIT"},
-    # Keep auth state when you refresh Swagger UI
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
 }
 
-
 # -----------------------------------------------------------------------------
-# Security defaults (safe baseline; prod hardening in prod.py)
+# Security defaults
 # -----------------------------------------------------------------------------
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
