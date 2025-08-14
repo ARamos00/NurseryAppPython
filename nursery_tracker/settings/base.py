@@ -31,6 +31,7 @@ CSRF_TRUSTED_ORIGINS = env.list(
 # Applications
 # -----------------------------------------------------------------------------
 INSTALLED_APPS = [
+    # Django apps
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -153,12 +154,24 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Nursery Tracker API",
     "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
     "VERSION": "0.1.0",
+
     "SERVERS": [
         {"url": "http://127.0.0.1:8000", "description": "Local Dev"},
     ],
     "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
     "LICENSE": {"name": "MIT"},
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
+
+    # ---- OpenAPI polish ----
+    # Use the desired component name (key) ➜ enum source (value).
+    # This resolves status-enum collisions and removes warnings.
+    "ENUM_NAME_OVERRIDES": {
+        "PlantStatus": "nursery.models.PlantStatus",
+        "BatchStatus": "nursery.models.BatchStatus",
+        "MaterialType": "nursery.models.MaterialType",
+        "PropagationMethod": "nursery.models.PropagationMethod",
+        "EventType": "nursery.models.EventType",
+    },
 }
 
 # -----------------------------------------------------------------------------

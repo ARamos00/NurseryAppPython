@@ -8,6 +8,8 @@ from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from drf_spectacular.utils import extend_schema  # <-- add
+
 from nursery.models import LabelToken
 
 
@@ -15,6 +17,7 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+@extend_schema(exclude=True)  # exclude from OpenAPI schema to avoid serializer guessing on APIView
 class PublicLabelView(APIView):
     """
     Public, human-friendly page for a label token.
