@@ -1,23 +1,18 @@
 from pathlib import Path
-import os
 import environ
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Paths & Env
-# -----------------------------------------------------------------------------
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-BASE_DIR = ROOT_DIR
-
-env = environ.Env(
-    DEBUG=(bool, False),
-)
+# ---------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+env = environ.Env(DEBUG=(bool, False))
 env_file = BASE_DIR / ".env"
 if env_file.exists():
     environ.Env.read_env(str(env_file))
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Core
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 SECRET_KEY = env("SECRET_KEY", default="dev-insecure-change-me")
 DEBUG = env.bool("DEBUG", False)
 
@@ -27,9 +22,9 @@ CSRF_TRUSTED_ORIGINS = env.list(
     default=["http://127.0.0.1:8000", "http://localhost:8000"],
 )
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Applications
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 INSTALLED_APPS = [
     # Django apps
     "django.contrib.admin",
@@ -79,9 +74,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "nursery_tracker.wsgi.application"
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Database
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 DATABASES = {
     "default": env.db(
         "DATABASE_URL",
@@ -89,9 +84,9 @@ DATABASES = {
     )
 }
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Password validation
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -99,27 +94,25 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Internationalization
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Static/Media
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 STATIC_URL = "static/"
-STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
-
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # DRF & API Schema
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
@@ -145,8 +138,9 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "user": env("DRF_THROTTLE_RATE_USER", default="200/min"),
         "anon": env("DRF_THROTTLE_RATE_ANON", default="50/min"),
-        "wizard-seed": "30/min",
-        "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="60/min"),
+        "wizard-seed": env("DRF_THROTTLE_RATE_WIZARD_SEED", default="30/min"),
+        "events-export": env("DRF_THROTTLE_RATE_EVENTS_EXPORT", default="10/min"),
+        "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="120/min"),
     },
 }
 
@@ -155,33 +149,33 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
     "VERSION": "0.1.0",
 
-    "SERVERS": [
-        {"url": "http://127.0.0.1:8000", "description": "Local Dev"},
-    ],
+    "SERVERS": [{"url": "http://127.0.0.1:8000", "description": "Local Dev"}],
     "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
     "LICENSE": {"name": "MIT"},
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
 
-    # ---- OpenAPI polish ----
-    # Use the desired component name (key) ➜ enum source (value).
-    # This resolves status-enum collisions and removes warnings.
+    # -----------------------------------------------------------------
+    # Explicit enum naming to avoid collisions/warnings.
+    # Mapping is: desired component name  ->  import path to the choices source
+    # (TextChoices/choices iterable). This is the officially supported shape.
+    # -----------------------------------------------------------------
     "ENUM_NAME_OVERRIDES": {
-        "PlantStatus": "nursery.models.PlantStatus",
-        "BatchStatus": "nursery.models.BatchStatus",
-        "MaterialType": "nursery.models.MaterialType",
-        "PropagationMethod": "nursery.models.PropagationMethod",
-        "EventType": "nursery.models.EventType",
+        "PlantStatusEnum": "nursery.models.PlantStatus",
+        "BatchStatusEnum": "nursery.models.BatchStatus",
+        "MaterialTypeEnum": "nursery.models.MaterialType",
+        "PropagationMethodEnum": "nursery.models.PropagationMethod",
+        "EventTypeEnum": "nursery.models.EventType",
     },
 }
 
-# -----------------------------------------------------------------------------
-# Security defaults
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Security defaults (safe baseline; prod hardening in prod.py)
+# ---------------------------------------------------------------------
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 X_FRAME_OPTIONS = "DENY"
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Auth model
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 AUTH_USER_MODEL = "accounts.User"

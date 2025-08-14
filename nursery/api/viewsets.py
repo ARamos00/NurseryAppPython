@@ -17,8 +17,9 @@ from nursery.serializers import (
     EventSerializer,
 )
 
-# Phase 2b: ops mixin
+# Custom ops mixins
 from .batch_ops import BatchOpsMixin
+from .plant_ops import PlantOpsMixin
 
 
 class OwnedModelViewSet(viewsets.ModelViewSet):
@@ -44,6 +45,7 @@ class OwnedModelViewSet(viewsets.ModelViewSet):
 
 
 class TaxonViewSet(OwnedModelViewSet):
+    lookup_value_regex = r"\d+"
     queryset = Taxon.objects.all()
     serializer_class = TaxonSerializer
     filterset_fields = ["scientific_name", "cultivar", "clone_code"]
@@ -53,6 +55,7 @@ class TaxonViewSet(OwnedModelViewSet):
 
 
 class PlantMaterialViewSet(OwnedModelViewSet):
+    lookup_value_regex = r"\d+"
     queryset = PlantMaterial.objects.select_related("taxon").all()
     serializer_class = PlantMaterialSerializer
     filterset_fields = ["taxon", "material_type", "lot_code"]
@@ -65,6 +68,7 @@ class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
     """
     Adds custom ops (harvest/cull/complete) via BatchOpsMixin.
     """
+    lookup_value_regex = r"\d+"
     queryset = PropagationBatch.objects.select_related("material", "material__taxon").all()
     serializer_class = PropagationBatchSerializer
     filterset_fields = ["material", "method", "status", "started_on"]
@@ -78,7 +82,8 @@ class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
     ordering = ["-started_on", "-created_at"]
 
 
-class PlantViewSet(OwnedModelViewSet):
+class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
+    lookup_value_regex = r"\d+"
     queryset = Plant.objects.select_related("taxon", "batch").all()
     serializer_class = PlantSerializer
     filterset_fields = ["taxon", "batch", "status", "acquired_on"]
@@ -88,6 +93,11 @@ class PlantViewSet(OwnedModelViewSet):
 
 
 class EventViewSet(OwnedModelViewSet):
+    """
+    Event endpoints. Export is served by the standalone APIView at
+    /api/events/export/ (see nursery/exports.py).
+    """
+    lookup_value_regex = r"\d+"
     queryset = Event.objects.select_related("batch", "plant").all()
     serializer_class = EventSerializer
     filterset_fields = ["batch", "plant", "event_type", "happened_at"]

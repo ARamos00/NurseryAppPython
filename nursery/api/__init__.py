@@ -1,33 +1,23 @@
-"""
-Modular API package for Nursery.
-
-Exports:
-- CRUD ViewSets (viewsets.py)
-- Wizard endpoints (wizard_seed.py)
-- Label endpoints (labels.py)
-"""
+# Explicit re-exports for router imports like:
+#   from nursery.api import EventViewSet, ...
+# Ensure there is NO file named nursery/api.py in your tree (it would shadow this package).
 
 from .viewsets import (
-    OwnedModelViewSet,
     TaxonViewSet,
     PlantMaterialViewSet,
     PropagationBatchViewSet,
     PlantViewSet,
-    EventViewSet,
+    EventViewSet,  # includes EventsExportMixin
 )
 from .wizard_seed import WizardSeedViewSet
 from .labels import LabelViewSet
 
 __all__ = [
-    # CRUD
-    "OwnedModelViewSet",
     "TaxonViewSet",
     "PlantMaterialViewSet",
     "PropagationBatchViewSet",
     "PlantViewSet",
     "EventViewSet",
-    # Wizard
     "WizardSeedViewSet",
-    # Labels
     "LabelViewSet",
 ]

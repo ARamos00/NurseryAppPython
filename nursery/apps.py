@@ -6,10 +6,12 @@ class NurseryConfig(AppConfig):
     name = "nursery"
 
     def ready(self) -> None:
-        # Import schema extensions so drf-spectacular can register them.
-        # Keep this import tolerant in dev to not break migrations or admin.
+        # Import schema extensions & signals so they're registered at startup.
         try:
             from . import schema  # noqa: F401
         except Exception:
-            # It's safe to ignore import issues during certain management commands.
+            pass
+        try:
+            from . import signals  # noqa: F401
+        except Exception:
             pass
