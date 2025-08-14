@@ -17,6 +17,9 @@ from nursery.serializers import (
     EventSerializer,
 )
 
+# Phase 2b: ops mixin
+from .batch_ops import BatchOpsMixin
+
 
 class OwnedModelViewSet(viewsets.ModelViewSet):
     """
@@ -25,7 +28,6 @@ class OwnedModelViewSet(viewsets.ModelViewSet):
       - Applies object-level IsOwner permissions
       - Scopes queryset by request.user
       - Sets obj.user on create
-
     Concrete subclasses must set `queryset` and `serializer_class`.
     """
     permission_classes = [IsAuthenticated, IsOwner]
@@ -54,17 +56,15 @@ class PlantMaterialViewSet(OwnedModelViewSet):
     queryset = PlantMaterial.objects.select_related("taxon").all()
     serializer_class = PlantMaterialSerializer
     filterset_fields = ["taxon", "material_type", "lot_code"]
-    search_fields = [
-        "lot_code",
-        "taxon__scientific_name",
-        "taxon__cultivar",
-        "taxon__clone_code",
-    ]
+    search_fields = ["lot_code", "taxon__scientific_name", "taxon__cultivar", "taxon__clone_code"]
     ordering_fields = ["created_at", "updated_at", "material_type"]
     ordering = ["-created_at"]
 
 
-class PropagationBatchViewSet(OwnedModelViewSet):
+class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
+    """
+    Adds custom ops (harvest/cull/complete) via BatchOpsMixin.
+    """
     queryset = PropagationBatch.objects.select_related("material", "material__taxon").all()
     serializer_class = PropagationBatchSerializer
     filterset_fields = ["material", "method", "status", "started_on"]

@@ -2,7 +2,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from core.models import OwnedModel
@@ -116,6 +116,17 @@ class PropagationBatch(OwnedModel):
     def __str__(self) -> str:
         return f"Batch #{self.pk} • {self.get_method_display()} • {self.material}"
 
+    # ---- Phase 2b helper: derived availability ----
+    def available_quantity(self) -> int:
+        """
+        Remaining units available in the batch (not yet harvested or culled).
+        Computed as: quantity_started + sum(quantity_delta for events on this batch)
+        where harvest/cull write negative deltas.
+        """
+        agg = self.events.aggregate(total=Sum("quantity_delta"))
+        total_delta = agg["total"] or 0
+        return int(self.quantity_started + total_delta)
+
 
 class PlantStatus(models.TextChoices):
     ACTIVE = "ACTIVE", "Active"
@@ -213,16 +224,12 @@ class Event(OwnedModel):
         return f"{self.get_event_type_display()} @ {self.happened_at:%Y-%m-%d %H:%M} → {target}"
 
 
-# ---- Phase 2a: Labels & Tokens (QR) ----
+# ---- Labels & Tokens remain unchanged (Phase 2a) ----
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 
 
 class Label(OwnedModel):
-    """
-    A perpetual label attached to a user-owned target (Plant, PropagationBatch, or PlantMaterial).
-    Exactly one active token at a time (managed at the application level).
-    """
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
@@ -252,12 +259,9 @@ class Label(OwnedModel):
 
 
 class LabelToken(models.Model):
-    """
-    A public token for a label. We store only SHA-256 of the raw token; raw value is never persisted.
-    """
     label = models.ForeignKey(Label, on_delete=models.CASCADE, related_name="tokens")
     token_hash = models.CharField(max_length=64, unique=True)
-    prefix = models.CharField(max_length=12)  # first characters of the raw token for support
+    prefix = models.CharField(max_length=12)
     created_at = models.DateTimeField(auto_now_add=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
 
