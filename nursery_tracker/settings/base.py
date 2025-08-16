@@ -140,7 +140,8 @@ REST_FRAMEWORK = {
         "events-export": env("DRF_THROTTLE_RATE_EVENTS_EXPORT", default="10/min"),
         "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="120/min"),
         "audit-read": env("DRF_THROTTLE_RATE_AUDIT_READ", default="60/min"),
-        "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),  # NEW
+        "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),
+        "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),  # NEW
     },
 }
 

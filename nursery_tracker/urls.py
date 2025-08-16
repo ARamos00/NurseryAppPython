@@ -21,6 +21,7 @@ from nursery.api import (
 from nursery.api.labels import LabelViewSet
 from nursery.api.audit import AuditLogViewSet
 from nursery.api.imports import TaxaImportView, MaterialsImportView, PlantsImportView
+from nursery.api.reports import InventoryReportView, ProductionReportView
 from nursery.exports import EventsExportView
 from nursery.public_views import PublicLabelView
 
@@ -42,17 +43,22 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 
-    # Public label page
-    path("p/<slug:token>/", PublicLabelView.as_view(), name="label-public"),
-
-    # API routes
-    path("api/", include(router.urls)),
-
-    # Standalone endpoints
+    # ---- Standalone endpoints must come BEFORE the router include ----
+    # Events export (canonical)
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
+
+    # Reports
+    path("api/reports/inventory/", InventoryReportView.as_view(), name="report-inventory"),
+    path("api/reports/production/", ProductionReportView.as_view(), name="report-production"),
 
     # Imports
     path("api/imports/taxa/", TaxaImportView.as_view(), name="import-taxa"),
     path("api/imports/materials/", MaterialsImportView.as_view(), name="import-materials"),
     path("api/imports/plants/", PlantsImportView.as_view(), name="import-plants"),
+
+    # Public label page (by token)
+    path("p/<slug:token>/", PublicLabelView.as_view(), name="label-public"),
+
+    # Router-driven CRUD/API
+    path("api/", include(router.urls)),
 ]

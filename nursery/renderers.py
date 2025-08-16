@@ -10,16 +10,16 @@ class PassthroughCSVRenderer(BaseRenderer):
     Minimal CSV renderer to satisfy DRF's URL format override and content
     negotiation when clients use `?format=csv` or `Accept: text/csv`.
 
-    We still return a manually constructed HttpResponse for CSV in our view,
-    but exposing this renderer prevents DRF from rejecting the request before
-    our handler runs.
+    Views can return a regular `Response(str_or_bytes)` for CSV and let DRF
+    render it, or still construct an HttpResponse manually. Register this
+    renderer at the view level via `renderer_classes`.
 
-    If a Response() is ever rendered with this renderer, we fall back to a
-    simple utf-8 encoding or JSON-dump to avoid crashes.
+    If a Response() is rendered with this renderer, we encode to UTF-8 bytes.
+    For non-string/bytes payloads, we JSON-dump as a best effort to avoid crashes.
     """
     media_type = "text/csv"
     format = "csv"
-    charset = None  # send bytes
+    charset = None  # send bytes; we handle encoding explicitly
 
     def render(
         self,
