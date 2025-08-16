@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from django.contrib.contenttypes.models import ContentType
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
@@ -8,6 +11,8 @@ from nursery.models import (
     PropagationBatch,
     Plant,
     Event,
+    AuditLog,
+    AuditAction,
 )
 from nursery.serializers import (
     TaxonSerializer,
@@ -17,19 +22,20 @@ from nursery.serializers import (
     EventSerializer,
 )
 
-# Custom ops mixins
 from .batch_ops import BatchOpsMixin
 from .plant_ops import PlantOpsMixin
+from .mixins import ETagConcurrencyMixin, _snapshot_model, _diff, _request_meta
 
 
-class OwnedModelViewSet(viewsets.ModelViewSet):
+class OwnedModelViewSet(ETagConcurrencyMixin, viewsets.ModelViewSet):
     """
     Base ViewSet that:
       - Requires authentication
       - Applies object-level IsOwner permissions
       - Scopes queryset by request.user
       - Sets obj.user on create
-    Concrete subclasses must set `queryset` and `serializer_class`.
+      - Adds optimistic concurrency (ETag/If-Match)
+      - Writes AuditLog entries for create/update/delete (API-originated only)
     """
     permission_classes = [IsAuthenticated, IsOwner]
 
@@ -40,8 +46,46 @@ class OwnedModelViewSet(viewsets.ModelViewSet):
             return base_qs.none()
         return base_qs.filter(user=user)
 
+    def _audit_write(self, instance, action: str, before: dict | None, after: dict | None):
+        # Minimal, inline to avoid import cycles
+        owner = getattr(instance, "user", None) or self.request.user
+        rid, ip, ua = _request_meta(self.request)
+        ct = ContentType.objects.get_for_model(instance, for_concrete_model=False)
+        AuditLog.objects.create(
+            user=owner,
+            actor=self.request.user if self.request.user.is_authenticated else None,
+            content_type=ct,
+            object_id=getattr(instance, "pk", None) or 0,
+            action=action,
+            changes=_diff(before, after),
+            request_id=rid,
+            ip=ip,
+            user_agent=ua,
+        )
+
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        instance = serializer.save(user=self.request.user)
+        self._audit_write(instance, AuditAction.CREATE, None, _snapshot_model(instance))
+
+    def perform_update(self, serializer):
+        # Capture "before" snapshot from DB to detect real changes
+        model = serializer.Meta.model
+        pk = self.get_object().pk  # call get_object once to respect IsOwner
+        before_obj = model.objects.get(pk=pk)
+        before = _snapshot_model(before_obj)
+
+        instance = serializer.save()
+        after = _snapshot_model(instance)
+
+        # Only write if something actually changed
+        if any(v[0] != v[1] for v in _diff(before, after).values()):
+            self._audit_write(instance, AuditAction.UPDATE, before, after)
+
+    def perform_destroy(self, instance):
+        before = _snapshot_model(instance)
+        obj_id = instance.pk
+        self._audit_write(instance, AuditAction.DELETE, before, None)
+        super().perform_destroy(instance)
 
 
 class TaxonViewSet(OwnedModelViewSet):
@@ -65,9 +109,6 @@ class PlantMaterialViewSet(OwnedModelViewSet):
 
 
 class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
-    """
-    Adds custom ops (harvest/cull/complete) via BatchOpsMixin.
-    """
     lookup_value_regex = r"\d+"
     queryset = PropagationBatch.objects.select_related("material", "material__taxon").all()
     serializer_class = PropagationBatchSerializer
@@ -93,10 +134,6 @@ class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
 
 
 class EventViewSet(OwnedModelViewSet):
-    """
-    Event endpoints. Export is served by the standalone APIView at
-    /api/events/export/ (see nursery/exports.py).
-    """
     lookup_value_regex = r"\d+"
     queryset = Event.objects.select_related("batch", "plant").all()
     serializer_class = EventSerializer

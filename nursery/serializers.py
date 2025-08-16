@@ -1,4 +1,11 @@
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
+
 from .models import (
     Taxon,
     PlantMaterial,
@@ -7,6 +14,7 @@ from .models import (
     Event,
     Label,
     LabelToken,
+    AuditLog,
 )
 
 
@@ -168,3 +176,43 @@ class LabelCreateSerializer(serializers.ModelSerializer):
         model = Label
         fields = ["id", "target", "token", "public_url", "created_at", "updated_at", "user"]
         read_only_fields = ["id", "token", "public_url", "created_at", "updated_at", "user"]
+
+class AuditActorSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+
+
+class AuditTargetSerializer(serializers.Serializer):
+    model = serializers.CharField()
+    id = serializers.IntegerField()
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    when = serializers.DateTimeField(source="created_at", read_only=True)
+    actor = serializers.SerializerMethodField()
+    target = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            "id",
+            "when",
+            "actor",
+            "target",
+            "action",
+            "changes",
+            "request_id",
+            "ip",
+            "user_agent",
+        ]
+        read_only_fields = fields
+
+    def get_actor(self, obj: AuditLog) -> Dict[str, Any] | None:
+        if not obj.actor_id:
+            return None
+        return {"id": obj.actor_id, "username": getattr(obj.actor, "username", "")}
+
+    def get_target(self, obj: AuditLog) -> Dict[str, Any]:
+        ct: ContentType = obj.content_type
+        model_label = f"{ct.app_label}.{ct.model}"
+        return {"model": model_label, "id": obj.object_id}

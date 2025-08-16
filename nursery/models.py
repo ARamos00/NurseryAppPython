@@ -7,7 +7,6 @@ from django.utils import timezone
 
 from core.models import OwnedModel
 
-# ---- existing domain models ----
 
 class Taxon(OwnedModel):
     scientific_name = models.CharField(max_length=200)
@@ -275,3 +274,55 @@ class LabelToken(models.Model):
     def __str__(self) -> str:
         state = "revoked" if self.revoked_at else "active"
         return f"LabelToken<{self.prefix}> ({state}) for label {self.label_id}"
+
+
+
+class AuditAction(models.TextChoices):
+    CREATE = "create", "Create"
+    UPDATE = "update", "Update"
+    DELETE = "delete", "Delete"
+
+
+class AuditLog(models.Model):
+    """
+    Lightweight audit trail for API-originated mutations.
+    - `user` is the *owner* of the mutated record (for tenancy scoping).
+    - `actor` is the authenticated user who performed the mutation (usually the same as `user`).
+    - `content_type` + `object_id` identifies the mutated object.
+    - `action` ∈ {"create","update","delete"}.
+    - `changes`: JSON dictionary of field diffs; for updates stores {field: [old, new]}.
+      For creates, stores {"_after": {...snapshot...}}; for deletes, {"_before": {...snapshot...}}.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="audit_logs",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_actor_logs",
+    )
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.BigIntegerField()
+    action = models.CharField(max_length=12, choices=AuditAction.choices)
+    changes = models.JSONField(default=dict, blank=True)
+
+    request_id = models.CharField(max_length=64, blank=True, default="")
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["user", "content_type", "object_id"]),
+            models.Index(fields=["action"]),
+        ]
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:  # pragma: no cover (repr aid)
+        return f"AuditLog<{self.action} {self.content_type.app_label}.{self.content_type.model}:{self.object_id}>"

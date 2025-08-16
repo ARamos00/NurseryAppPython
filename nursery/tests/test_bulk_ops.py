@@ -69,11 +69,6 @@ class BulkAndExportTests(TestCase):
         Event.objects.create(user=self.user, batch=self.batch, event_type=EventType.SOW, quantity_delta=12)
         Event.objects.create(user=self.user, plant=self.p1, event_type=EventType.NOTE, notes="Check")
 
-        from django.urls import resolve
-        m = resolve("/api/events/export/")
-        print("Resolved:", m.url_name, m.func)
-        # CSV
-
         r_csv = self.client.get("/api/events/export/?format=csv")
         self.assertEqual(r_csv.status_code, 200)
         self.assertTrue(r_csv["Content-Type"].startswith("text/csv"))

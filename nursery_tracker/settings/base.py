@@ -127,9 +127,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
-
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -141,6 +139,7 @@ REST_FRAMEWORK = {
         "wizard-seed": env("DRF_THROTTLE_RATE_WIZARD_SEED", default="30/min"),
         "events-export": env("DRF_THROTTLE_RATE_EVENTS_EXPORT", default="10/min"),
         "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="120/min"),
+        "audit-read": env("DRF_THROTTLE_RATE_AUDIT_READ", default="60/min"),  # NEW
     },
 }
 
@@ -154,11 +153,7 @@ SPECTACULAR_SETTINGS = {
     "LICENSE": {"name": "MIT"},
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
 
-    # -----------------------------------------------------------------
-    # Explicit enum naming to avoid collisions/warnings.
-    # Mapping is: desired component name  ->  import path to the choices source
-    # (TextChoices/choices iterable). This is the officially supported shape.
-    # -----------------------------------------------------------------
+    # stable enum names for docs
     "ENUM_NAME_OVERRIDES": {
         "PlantStatusEnum": "nursery.models.PlantStatus",
         "BatchStatusEnum": "nursery.models.BatchStatus",
@@ -179,3 +174,9 @@ X_FRAME_OPTIONS = "DENY"
 # Auth model
 # ---------------------------------------------------------------------
 AUTH_USER_MODEL = "accounts.User"
+
+# ---------------------------------------------------------------------
+# Concurrency (optimistic locking) switch
+# ---------------------------------------------------------------------
+# When True, PATCH/PUT/DELETE require `If-Match` and return 428 if missing.
+ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
