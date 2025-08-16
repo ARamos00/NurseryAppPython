@@ -10,7 +10,6 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
-# Core API ViewSets
 from nursery.api import (
     TaxonViewSet,
     PlantMaterialViewSet,
@@ -19,14 +18,9 @@ from nursery.api import (
     EventViewSet,
     WizardSeedViewSet,
 )
-
-# Labels (ensure this import is present)
 from nursery.api.labels import LabelViewSet
-
-# Audit API
 from nursery.api.audit import AuditLogViewSet
-
-# Standalone views
+from nursery.api.imports import TaxaImportView, MaterialsImportView, PlantsImportView
 from nursery.exports import EventsExportView
 from nursery.public_views import PublicLabelView
 
@@ -37,7 +31,7 @@ router.register(r"batches", PropagationBatchViewSet, basename="propagationbatch"
 router.register(r"plants", PlantViewSet, basename="plant")
 router.register(r"events", EventViewSet, basename="event")
 router.register(r"wizard/seed", WizardSeedViewSet, basename="wizard-seed")
-router.register(r"labels", LabelViewSet, basename="label")         # <-- restored
+router.register(r"labels", LabelViewSet, basename="label")
 router.register(r"audit", AuditLogViewSet, basename="audit")
 
 urlpatterns = [
@@ -48,12 +42,17 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 
-    # Public label page (by token)
+    # Public label page
     path("p/<slug:token>/", PublicLabelView.as_view(), name="label-public"),
 
-    # API routes (router)
+    # API routes
     path("api/", include(router.urls)),
 
-    # Canonical events export
+    # Standalone endpoints
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
+
+    # Imports
+    path("api/imports/taxa/", TaxaImportView.as_view(), name="import-taxa"),
+    path("api/imports/materials/", MaterialsImportView.as_view(), name="import-materials"),
+    path("api/imports/plants/", PlantsImportView.as_view(), name="import-plants"),
 ]

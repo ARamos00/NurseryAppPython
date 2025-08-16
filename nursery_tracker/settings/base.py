@@ -139,7 +139,8 @@ REST_FRAMEWORK = {
         "wizard-seed": env("DRF_THROTTLE_RATE_WIZARD_SEED", default="30/min"),
         "events-export": env("DRF_THROTTLE_RATE_EVENTS_EXPORT", default="10/min"),
         "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="120/min"),
-        "audit-read": env("DRF_THROTTLE_RATE_AUDIT_READ", default="60/min"),  # NEW
+        "audit-read": env("DRF_THROTTLE_RATE_AUDIT_READ", default="60/min"),
+        "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),  # NEW
     },
 }
 
@@ -147,13 +148,10 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Nursery Tracker API",
     "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
     "VERSION": "0.1.0",
-
     "SERVERS": [{"url": "http://127.0.0.1:8000", "description": "Local Dev"}],
     "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
     "LICENSE": {"name": "MIT"},
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
-
-    # stable enum names for docs
     "ENUM_NAME_OVERRIDES": {
         "PlantStatusEnum": "nursery.models.PlantStatus",
         "BatchStatusEnum": "nursery.models.BatchStatus",
@@ -162,6 +160,12 @@ SPECTACULAR_SETTINGS = {
         "EventTypeEnum": "nursery.models.EventType",
     },
 }
+
+# Concurrency strictness toggle
+ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
+
+# NEW: Import size cap (bytes)
+MAX_IMPORT_BYTES = env.int("MAX_IMPORT_BYTES", default=5_000_000)
 
 # ---------------------------------------------------------------------
 # Security defaults (safe baseline; prod hardening in prod.py)
