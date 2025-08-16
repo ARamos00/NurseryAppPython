@@ -10,6 +10,7 @@ from urllib.error import URLError, HTTPError
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import Q  # <-- FIX: bring in Q
 from django.utils import timezone
 
 from nursery.models import WebhookDelivery, WebhookDeliveryStatus
@@ -40,7 +41,7 @@ class Command(BaseCommand):
             WebhookDelivery.objects
             .select_related("endpoint")
             .filter(status=WebhookDeliveryStatus.QUEUED)
-            .filter(models.Q(next_attempt_at__isnull=True) | models.Q(next_attempt_at__lte=now))
+            .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))  # <-- use Q
             .order_by("created_at")[:limit]
         )
 
