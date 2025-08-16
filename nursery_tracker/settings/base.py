@@ -141,7 +141,8 @@ REST_FRAMEWORK = {
         "label-public": env("DRF_THROTTLE_RATE_LABEL_PUBLIC", default="120/min"),
         "audit-read": env("DRF_THROTTLE_RATE_AUDIT_READ", default="60/min"),
         "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),
-        "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),  # NEW
+        "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),
+        "labels-read": env("DRF_THROTTLE_RATE_LABELS_READ", default="60/min"),
     },
 }
 
@@ -185,3 +186,11 @@ AUTH_USER_MODEL = "accounts.User"
 # ---------------------------------------------------------------------
 # When True, PATCH/PUT/DELETE require `If-Match` and return 428 if missing.
 ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
+
+# --- Webhooks ------------------------------------------------------------------
+# Require HTTPS for webhook endpoints unless explicitly disabled for local dev.
+WEBHOOKS_REQUIRE_HTTPS = env.bool("WEBHOOKS_REQUIRE_HTTPS", default=not DEBUG)
+WEBHOOKS_SIGNATURE_HEADER = env("WEBHOOKS_SIGNATURE_HEADER", default="X-Webhook-Signature")
+WEBHOOKS_USER_AGENT = env("WEBHOOKS_USER_AGENT", default="NurseryTracker/0.1")
+# Turn on automatic emits later (e.g., from signals) without altering code.
+WEBHOOKS_ENABLE_AUTO_EMIT = env.bool("WEBHOOKS_ENABLE_AUTO_EMIT", default=False)

@@ -17,6 +17,7 @@ from nursery.api import (
     PlantViewSet,
     EventViewSet,
     WizardSeedViewSet,
+    WebhookEndpointViewSet, WebhookDeliveryViewSet,
 )
 from nursery.api.labels import LabelViewSet
 from nursery.api.audit import AuditLogViewSet
@@ -34,6 +35,8 @@ router.register(r"events", EventViewSet, basename="event")
 router.register(r"wizard/seed", WizardSeedViewSet, basename="wizard-seed")
 router.register(r"labels", LabelViewSet, basename="label")
 router.register(r"audit", AuditLogViewSet, basename="audit")
+router.register(r"webhooks/endpoints", WebhookEndpointViewSet, basename="wh-endpoint")
+router.register(r"webhooks/deliveries", WebhookDeliveryViewSet, basename="wh-delivery")
 
 urlpatterns = [
     path("admin/", admin.site.urls),

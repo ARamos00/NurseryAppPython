@@ -14,6 +14,7 @@ from .models import (
     Event,
     Label,
     LabelToken,
+    LabelVisit,
     AuditLog,
 )
 
@@ -216,3 +217,9 @@ class AuditLogSerializer(serializers.ModelSerializer):
         ct: ContentType = obj.content_type
         model_label = f"{ct.app_label}.{ct.model}"
         return {"model": model_label, "id": obj.object_id}
+
+class LabelStatsSerializer(serializers.Serializer):
+    label_id = serializers.IntegerField()
+    total_visits = serializers.IntegerField()
+    last_7d = serializers.IntegerField()
+    last_30d = serializers.IntegerField()

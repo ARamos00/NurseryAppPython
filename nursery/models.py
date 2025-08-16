@@ -100,7 +100,7 @@ class PropagationBatch(OwnedModel):
     material = models.ForeignKey(PlantMaterial, on_delete=models.CASCADE, related_name="batches")
     method = models.CharField(max_length=24, choices=PropagationMethod.choices)
     status = models.CharField(max_length=16, choices=BatchStatus.choices, default=BatchStatus.STARTED)
-    started_on = models.DateField(default=timezone.now)
+    started_on = models.DateField(default=timezone.now)  # consider timezone.localdate later
     quantity_started = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     notes = models.TextField(blank=True)
 
@@ -142,7 +142,7 @@ class Plant(OwnedModel):
     )
     status = models.CharField(max_length=12, choices=PlantStatus.choices, default=PlantStatus.ACTIVE)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
-    acquired_on = models.DateField(default=timezone.now)
+    acquired_on = models.DateField(default=timezone.now)  # consider timezone.localdate later
     notes = models.TextField(blank=True)
 
     class Meta:
@@ -223,9 +223,9 @@ class Event(OwnedModel):
         return f"{self.get_event_type_display()} @ {self.happened_at:%Y-%m-%d %H:%M} → {target}"
 
 
-# ---- Labels & Tokens remain unchanged (Phase 2a) ----
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
+# ---- Labels & Tokens (Phase 2a) ----
+from django.contrib.contenttypes.fields import GenericForeignKey  # noqa: E402
+from django.contrib.contenttypes.models import ContentType  # noqa: E402
 
 
 class Label(OwnedModel):
@@ -275,6 +275,28 @@ class LabelToken(models.Model):
         state = "revoked" if self.revoked_at else "active"
         return f"LabelToken<{self.prefix}> ({state}) for label {self.label_id}"
 
+
+class LabelVisit(OwnedModel):
+    """
+    A single scan of a Label's public URL.
+    Privacy: no linkage to an authenticated viewer; only coarse request metadata.
+    """
+    label = models.ForeignKey("nursery.Label", on_delete=models.CASCADE, related_name="visits")
+    token = models.ForeignKey("nursery.LabelToken", on_delete=models.SET_NULL, null=True, blank=True, related_name="visits")
+
+    requested_at = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=256, blank=True)
+    referrer = models.CharField(max_length=512, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("label", "-requested_at")),
+            models.Index(fields=("user", "-requested_at")),
+        ]
+
+    def __str__(self) -> str:
+        return f"Visit #{self.pk} • Label {self.label_id} @ {self.requested_at:%Y-%m-%d %H:%M:%S}"
 
 
 class AuditAction(models.TextChoices):
@@ -326,3 +348,98 @@ class AuditLog(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover (repr aid)
         return f"AuditLog<{self.action} {self.content_type.app_label}.{self.content_type.model}:{self.object_id}>"
+
+
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+class WebhookEventType(models.TextChoices):
+    EVENT_CREATED = "event.created", "Event created"
+    PLANT_STATUS_CHANGED = "plant.status_changed", "Plant status changed"
+    BATCH_STATUS_CHANGED = "batch.status_changed", "Batch status changed"
+
+class WebhookDeliveryStatus(models.TextChoices):
+    QUEUED = "QUEUED", "Queued"
+    SENT = "SENT", "Sent"
+    FAILED = "FAILED", "Failed"
+
+class WebhookEndpoint(OwnedModel):
+    """
+    A user-owned webhook endpoint. `secret` is used to compute HMAC-SHA256
+    signatures for each POST. Never return `secret` via API; only allow write.
+    """
+    name = models.CharField(max_length=100, blank=True, default="")
+    url = models.URLField(max_length=500)
+    # List of event type strings (TextChoices values). [] or ["*"] means "all".
+    event_types = models.JSONField(default=list, blank=True)
+    secret = models.CharField(max_length=128)  # stored as-is; do NOT expose
+    secret_last4 = models.CharField(max_length=8, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["user", "is_active"]),
+            models.Index(fields=["user", "url"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                name="webhook_url_https_or_allowed",
+                check=Q(url__startswith="https://") | Q(url__startswith="http://"),
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        # App-level HTTPS enforcement happens in serializer (has settings access).
+        # Keep model clean permissive (so tests/dev can store http:// if allowed).
+
+        # Validate URL shape early
+        try:
+            URLValidator()(self.url)
+        except DjangoValidationError as e:
+            raise ValidationError({"url": e.messages})
+
+        # Normalize event_types
+        if not isinstance(self.event_types, list):
+            raise ValidationError({"event_types": "Must be a list of event type strings."})
+
+        # Cache secret tail for display
+        if self.secret and not self.secret_last4:
+            self.secret_last4 = self.secret[-4:]
+
+    def __str__(self) -> str:
+        return f"WebhookEndpoint<{self.id}> → {self.url} ({'active' if self.is_active else 'inactive'})"
+
+
+class WebhookDelivery(OwnedModel):
+    """
+    A single delivery attempt payload for an endpoint. Immutable payload, mutable
+    attempt/response fields. Owner equals endpoint.user (duplicated for scoping).
+    """
+    endpoint = models.ForeignKey(WebhookEndpoint, on_delete=models.CASCADE, related_name="deliveries")
+    event_type = models.CharField(max_length=48, choices=WebhookEventType.choices)
+    payload = models.JSONField(default=dict, blank=True)
+
+    status = models.CharField(max_length=10, choices=WebhookDeliveryStatus.choices, default=WebhookDeliveryStatus.QUEUED)
+    attempt_count = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+
+    response_status = models.IntegerField(null=True, blank=True)
+    response_headers = models.JSONField(default=dict, blank=True)
+    response_body = models.TextField(blank=True, default="")
+    last_error = models.TextField(blank=True, default="")
+    request_duration_ms = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["user", "event_type"]),
+            models.Index(fields=["endpoint", "status"]),
+            models.Index(fields=["-next_attempt_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Delivery<{self.id}> {self.event_type} → ep#{self.endpoint_id} [{self.status}]"

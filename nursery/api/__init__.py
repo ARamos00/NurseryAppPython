@@ -11,6 +11,7 @@ from .viewsets import (
 )
 from .wizard_seed import WizardSeedViewSet
 from .labels import LabelViewSet
+from .webhooks import WebhookEndpointViewSet, WebhookDeliveryViewSet
 
 __all__ = [
     "TaxonViewSet",
@@ -20,4 +21,6 @@ __all__ = [
     "EventViewSet",
     "WizardSeedViewSet",
     "LabelViewSet",
+    "WebhookEndpointViewSet",
+    "WebhookDeliveryViewSet",
 ]

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -16,8 +18,12 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema
 
 from core.permissions import IsOwner
 from core.utils.idempotency import idempotent
-from nursery.models import Label, LabelToken
-from nursery.serializers import LabelCreateSerializer, LabelSerializer
+from nursery.models import Label, LabelToken, LabelVisit
+from nursery.serializers import (
+    LabelSerializer,
+    LabelCreateSerializer,
+    LabelStatsSerializer,
+)
 
 
 IDEMPOTENCY_PARAM = OpenApiParameter(
@@ -33,27 +39,46 @@ IDEMPOTENCY_PARAM = OpenApiParameter(
 
 
 def _hash_token(raw: str) -> str:
+    """Create a SHA-256 hex digest for a raw token (never store raw)."""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _new_token() -> str:
-    # ~192 bits entropy; URL-safe; ~32-34 chars
+    """Generate a URL-safe token (~192 bits entropy, ~32–34 chars)."""
     return secrets.token_urlsafe(24)
 
 
 class LabelViewSet(viewsets.ModelViewSet):
     """
-    Owner-scoped CRUD for Labels plus rotate/revoke actions.
-    Raw token is only returned on create/rotate and is never stored.
+    Owner-scoped CRUD for QR Labels with token rotation and stats.
+
+    Security:
+      - Objects are owner-scoped (IsAuthenticated + IsOwner).
+      - Raw tokens are returned only on create/rotate and are never persisted.
+      - Public page is separate (`/p/<token>/`) and handled elsewhere.
+
+    Concurrency:
+      - Token rotation happens within a transaction; we lock the Label row
+        to prevent racing rotates.
+
+    API:
+      - POST /api/labels/              -> 201 with {token, public_url, ...}
+      - POST /api/labels/{id}/rotate/  -> 200 with {token, public_url, ...}
+      - POST /api/labels/{id}/revoke/  -> 200 {"revoked": true}
+      - GET  /api/labels/{id}/stats/   -> 200 label visit counts
     """
+
     permission_classes = [IsAuthenticated, IsOwner]
     serializer_class = LabelSerializer
     queryset = Label.objects.select_related("active_token").all()
-    filterset_fields = []
-    search_fields = []
+    filterset_fields: list[str] = []
+    search_fields: list[str] = []
     ordering_fields = ["created_at", "updated_at"]
     ordering = ["-created_at"]
 
+    # ----------------------------
+    # Queryset / serializer wiring
+    # ----------------------------
     def get_queryset(self):
         qs = super().get_queryset()
         user = getattr(self.request, "user", None)
@@ -66,7 +91,11 @@ class LabelViewSet(viewsets.ModelViewSet):
             return LabelCreateSerializer
         return LabelSerializer
 
+    # ----------------------------
+    # Helpers
+    # ----------------------------
     def _issue_token(self, label: Label) -> tuple[LabelToken, str]:
+        """Create a new token row for label and return (row, raw_token)."""
         raw = _new_token()
         token = LabelToken.objects.create(
             label=label,
@@ -75,9 +104,22 @@ class LabelViewSet(viewsets.ModelViewSet):
         )
         return token, raw
 
-    def _public_url(self, request: Request, raw_token: str) -> str:
-        return request.build_absolute_uri(f"/p/{raw_token}/")
+    def _revoke_active(self, label: Label) -> None:
+        """Mark the active token (if any) as revoked without altering label.active_token."""
+        if label.active_token_id:
+            LabelToken.objects.filter(
+                pk=label.active_token_id,
+                revoked_at__isnull=True,
+            ).update(revoked_at=timezone.now())
 
+    def _public_url(self, request: Request, raw_token: str) -> str:
+        """Absolute URL to the public page for a given raw token."""
+        url = reverse("label-public", kwargs={"token": raw_token})
+        return request.build_absolute_uri(url)
+
+    # ----------------------------
+    # CRUD / Actions
+    # ----------------------------
     @extend_schema(
         tags=["Labels"],
         parameters=[IDEMPOTENCY_PARAM],
@@ -85,16 +127,24 @@ class LabelViewSet(viewsets.ModelViewSet):
         responses={201: LabelCreateSerializer},
         description="Create a label for a target (plant, batch, or material). Returns a raw token once.",
     )
-    @idempotent  # standard create; no @action needed
-    def create(self, request: Request, *args, **kwargs):
+    @idempotent
+    def create(self, request: Request, *args, **kwargs) -> Response:
+        """
+        Creates (or reuses) a Label for the given target and rotates a fresh token.
+        If a label already exists and ?force=true is not provided, returns 409.
+        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         target_obj = serializer.validated_data["target"]
         ct = ContentType.objects.get_for_model(type(target_obj))
 
-        # If label exists: 409 unless ?force=true
-        existing = Label.objects.filter(user=request.user, content_type=ct, object_id=target_obj.pk).first()
+        # Enforce single label per (user,target)
+        existing = Label.objects.filter(
+            user=request.user,
+            content_type=ct,
+            object_id=target_obj.pk,
+        ).first()
         if existing and request.query_params.get("force") != "true":
             return Response(
                 {"non_field_errors": ["Label already exists for this target. Use ?force=true to rotate."]},
@@ -107,12 +157,14 @@ class LabelViewSet(viewsets.ModelViewSet):
                 content_type=ct,
                 object_id=target_obj.pk,
             )
-            # Issue token and rotate active
+            # lock the row if it already existed to avoid rotate races
+            if label.pk and existing:
+                label = Label.objects.select_for_update().get(pk=label.pk)
+
             token, raw = self._issue_token(label)
+            # revoke previous and set new active token
             if label.active_token_id and label.active_token_id != token.id:
-                LabelToken.objects.filter(pk=label.active_token_id, revoked_at__isnull=True).update(
-                    revoked_at=timezone.now()
-                )
+                self._revoke_active(label)
             label.active_token = token
             label.save(update_fields=["active_token", "updated_at"])
 
@@ -126,7 +178,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         responses={200: LabelSerializer},
         description="Retrieve a label. Does not return raw token.",
     )
-    def retrieve(self, request: Request, *args, **kwargs):
+    def retrieve(self, request: Request, *args, **kwargs) -> Response:
         return super().retrieve(request, *args, **kwargs)
 
     @extend_schema(
@@ -137,14 +189,15 @@ class LabelViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=["post"], url_path="rotate")
     @idempotent
-    def rotate(self, request: Request, pk=None) -> Response:
+    def rotate(self, request: Request, pk: str | None = None) -> Response:
         label = self.get_object()
         with transaction.atomic():
+            # lock the label row to serialize rotations
+            label = Label.objects.select_for_update().get(pk=label.pk)
+
             token, raw = self._issue_token(label)
             if label.active_token_id and label.active_token_id != token.id:
-                LabelToken.objects.filter(pk=label.active_token_id, revoked_at__isnull=True).update(
-                    revoked_at=timezone.now()
-                )
+                self._revoke_active(label)
             label.active_token = token
             label.save(update_fields=["active_token", "updated_at"])
 
@@ -159,13 +212,34 @@ class LabelViewSet(viewsets.ModelViewSet):
         description="Revoke the active token. Public URL will stop working. Safe to call multiple times.",
     )
     @action(detail=True, methods=["post"], url_path="revoke")
-    def revoke(self, request: Request, pk=None) -> Response:
+    def revoke(self, request: Request, pk: str | None = None) -> Response:
         label = self.get_object()
         with transaction.atomic():
+            # lock to serialize concurrent revocations
+            label = Label.objects.select_for_update().get(pk=label.pk)
+
+            self._revoke_active(label)
             if label.active_token_id:
-                LabelToken.objects.filter(pk=label.active_token_id, revoked_at__isnull=True).update(
-                    revoked_at=timezone.now()
-                )
                 label.active_token = None
                 label.save(update_fields=["active_token", "updated_at"])
         return Response({"id": label.id, "revoked": True}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=["Labels"],
+        responses={200: LabelStatsSerializer},
+        description="Owner-only analytics: total, last 7 days, and last 30 days visits for this label.",
+    )
+    @action(detail=True, methods=["get"], url_path="stats")
+    def stats(self, request: Request, pk: str | None = None) -> Response:
+        label = self.get_object()  # IsOwner enforces ownership
+        now = timezone.now()
+        v_qs = LabelVisit.objects.filter(label=label)
+
+        payload = {
+            "label_id": label.id,
+            "total_visits": v_qs.count(),
+            "last_7d": v_qs.filter(requested_at__gte=now - timedelta(days=7)).count(),
+            "last_30d": v_qs.filter(requested_at__gte=now - timedelta(days=30)).count(),
+        }
+        data = LabelStatsSerializer(payload).data
+        return Response(data, status=status.HTTP_200_OK)
