@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
@@ -19,12 +18,20 @@ from .models import (
 )
 
 
+# ----------------------------
+# Core model serializers
+# ----------------------------
 class TaxonSerializer(serializers.ModelSerializer):
     class Meta:
         model = Taxon
         fields = [
-            "id", "scientific_name", "cultivar", "clone_code",
-            "created_at", "updated_at", "user",
+            "id",
+            "scientific_name",
+            "cultivar",
+            "clone_code",
+            "created_at",
+            "updated_at",
+            "user",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "user"]
 
@@ -35,8 +42,15 @@ class PlantMaterialSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlantMaterial
         fields = [
-            "id", "taxon", "taxon_display", "material_type", "lot_code", "notes",
-            "created_at", "updated_at", "user",
+            "id",
+            "taxon",
+            "taxon_display",
+            "material_type",
+            "lot_code",
+            "notes",
+            "created_at",
+            "updated_at",
+            "user",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "user", "taxon_display"]
 
@@ -47,9 +61,17 @@ class PropagationBatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = PropagationBatch
         fields = [
-            "id", "material", "material_display", "method", "status",
-            "started_on", "quantity_started", "notes",
-            "created_at", "updated_at", "user",
+            "id",
+            "material",
+            "material_display",
+            "method",
+            "status",
+            "started_on",
+            "quantity_started",
+            "notes",
+            "created_at",
+            "updated_at",
+            "user",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "user", "material_display"]
 
@@ -61,11 +83,27 @@ class PlantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plant
         fields = [
-            "id", "taxon", "taxon_display", "batch", "batch_display",
-            "status", "quantity", "acquired_on", "notes",
-            "created_at", "updated_at", "user",
+            "id",
+            "taxon",
+            "taxon_display",
+            "batch",
+            "batch_display",
+            "status",
+            "quantity",
+            "acquired_on",
+            "notes",
+            "created_at",
+            "updated_at",
+            "user",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "user", "taxon_display", "batch_display"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "user",
+            "taxon_display",
+            "batch_display",
+        ]
 
 
 class EventSerializer(serializers.ModelSerializer):
@@ -75,13 +113,29 @@ class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = [
-            "id", "batch", "batch_display", "plant", "plant_display",
-            "event_type", "happened_at", "notes", "quantity_delta",
-            "created_at", "updated_at", "user",
+            "id",
+            "batch",
+            "batch_display",
+            "plant",
+            "plant_display",
+            "event_type",
+            "happened_at",
+            "notes",
+            "quantity_delta",
+            "created_at",
+            "updated_at",
+            "user",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "user", "batch_display", "plant_display"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "user",
+            "batch_display",
+            "plant_display",
+        ]
 
-    def validate(self, attrs):
+    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Enforce XOR(batch, plant) and ownership alignment at the serializer level
         for clear API errors (model.clean also enforces).
@@ -104,11 +158,12 @@ class EventSerializer(serializers.ModelSerializer):
         return attrs
 
 
-# ---- Phase 2a: Labels ----
-
+# ----------------------------
+# Labels (Phase 2a)
+# ----------------------------
 class LabelTargetField(serializers.Field):
     """
-    {"type": "plant"|"batch"|"material", "id": <int>}
+    Shape: {"type": "plant"|"batch"|"material", "id": <int>}
     Serializes to the same shape. Validates ownership.
     """
     default_error_messages = {
@@ -143,6 +198,7 @@ class LabelTargetField(serializers.Field):
             obj = Model.objects.get(pk=pk)
         except Model.DoesNotExist:
             self.fail("not_found")
+
         request = self.context.get("request")
         user = getattr(request, "user", None)
         if not user or not getattr(user, "is_authenticated", False) or obj.user_id != user.id:
@@ -168,7 +224,6 @@ class LabelCreateSerializer(serializers.ModelSerializer):
     """
     Used for create and rotate responses — returns raw token once.
     """
-    # Do not set source="target" here either.
     target = LabelTargetField()
     token = serializers.CharField(read_only=True)
     public_url = serializers.CharField(read_only=True)
@@ -178,6 +233,10 @@ class LabelCreateSerializer(serializers.ModelSerializer):
         fields = ["id", "target", "token", "public_url", "created_at", "updated_at", "user"]
         read_only_fields = ["id", "token", "public_url", "created_at", "updated_at", "user"]
 
+
+# ----------------------------
+# Audit log
+# ----------------------------
 class AuditActorSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     username = serializers.CharField()
@@ -218,8 +277,44 @@ class AuditLogSerializer(serializers.ModelSerializer):
         model_label = f"{ct.app_label}.{ct.model}"
         return {"model": model_label, "id": obj.object_id}
 
+
+# ----------------------------
+# Label analytics
+# ----------------------------
 class LabelStatsSerializer(serializers.Serializer):
+    """
+    Legacy/compact counts used when no ?days param is provided.
+    """
     label_id = serializers.IntegerField()
     total_visits = serializers.IntegerField()
     last_7d = serializers.IntegerField()
     last_30d = serializers.IntegerField()
+
+
+class LabelStatsQuerySerializer(serializers.Serializer):
+    """
+    Optional query serializer for stats.
+    """
+    days = serializers.IntegerField(min_value=1, max_value=365, required=False)
+
+
+class LabelVisitSeriesPointSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    visits = serializers.IntegerField()
+
+
+class LabelStatsWithSeriesSerializer(serializers.Serializer):
+    """
+    Full payload when ?days is present: legacy counts + window metadata + series.
+    """
+    # legacy counts
+    label_id = serializers.IntegerField()
+    total_visits = serializers.IntegerField()
+    last_7d = serializers.IntegerField()
+    last_30d = serializers.IntegerField()
+
+    # window + series
+    window_days = serializers.IntegerField()
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    series = LabelVisitSeriesPointSerializer(many=True)

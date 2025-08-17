@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import timedelta
+from datetime import timedelta, date
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.models import Count
+from django.db.models.functions import TruncDate
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -22,9 +24,11 @@ from nursery.models import Label, LabelToken, LabelVisit
 from nursery.serializers import (
     LabelSerializer,
     LabelCreateSerializer,
-    LabelStatsSerializer,
+    LabelStatsSerializer,             # legacy counts-only
+    LabelStatsQuerySerializer,        # ?days=...
+    LabelVisitSeriesPointSerializer,  # per-day points
+    LabelStatsWithSeriesSerializer,   # full payload when days provided
 )
-
 
 IDEMPOTENCY_PARAM = OpenApiParameter(
     name="Idempotency-Key",
@@ -65,7 +69,7 @@ class LabelViewSet(viewsets.ModelViewSet):
       - POST /api/labels/              -> 201 with {token, public_url, ...}
       - POST /api/labels/{id}/rotate/  -> 200 with {token, public_url, ...}
       - POST /api/labels/{id}/revoke/  -> 200 {"revoked": true}
-      - GET  /api/labels/{id}/stats/   -> 200 label visit counts
+      - GET  /api/labels/{id}/stats/   -> 200 owner-only analytics
     """
 
     permission_classes = [IsAuthenticated, IsOwner]
@@ -226,20 +230,68 @@ class LabelViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["Labels"],
-        responses={200: LabelStatsSerializer},
-        description="Owner-only analytics: total, last 7 days, and last 30 days visits for this label.",
+        parameters=[
+            OpenApiParameter(
+                name="days",
+                type=int,
+                required=False,
+                description="Optional rolling window in days (1–365). When provided, response includes per-day series.",
+            )
+        ],
+        responses={200: LabelStatsWithSeriesSerializer},
+        description=(
+            "Owner-only analytics for a label.\n"
+            "- No `days`: returns legacy counts only.\n"
+            "- `?days=N` (1–365): returns counts + per-day dense series with window metadata."
+        ),
     )
     @action(detail=True, methods=["get"], url_path="stats")
     def stats(self, request: Request, pk: str | None = None) -> Response:
         label = self.get_object()  # IsOwner enforces ownership
+
         now = timezone.now()
-        v_qs = LabelVisit.objects.filter(label=label)
+        visits = LabelVisit.objects.filter(label=label)
+
+        # Legacy counters (always computed)
+        base = {
+            "label_id": label.id,
+            "total_visits": visits.count(),
+            "last_7d": visits.filter(requested_at__gte=now - timedelta(days=7)).count(),
+            "last_30d": visits.filter(requested_at__gte=now - timedelta(days=30)).count(),
+        }
+
+        # If no days provided -> return legacy-only serializer
+        qser = LabelStatsQuerySerializer(data=request.query_params)
+        qser.is_valid(raise_exception=False)  # optional param; fall back if invalid
+        days = qser.validated_data.get("days") if hasattr(qser, "validated_data") else None
+        if not days:
+            return Response(LabelStatsSerializer(base).data, status=status.HTTP_200_OK)
+
+        # Compute inclusive window
+        end_date: date = now.date()
+        start_date: date = (now - timedelta(days=days - 1)).date()
+
+        # Group by date in DB
+        agg = (
+            visits.filter(requested_at__date__gte=start_date, requested_at__date__lte=end_date)
+            .annotate(d=TruncDate("requested_at"))
+            .values("d")
+            .annotate(visits=Count("id"))
+        )
+        by_day = {row["d"]: int(row["visits"]) for row in agg}
+
+        # Fill dense series covering every day in the window
+        series: list[dict] = []
+        cursor = start_date
+        while cursor <= end_date:
+            series.append({"date": cursor, "visits": by_day.get(cursor, 0)})
+            cursor += timedelta(days=1)
 
         payload = {
-            "label_id": label.id,
-            "total_visits": v_qs.count(),
-            "last_7d": v_qs.filter(requested_at__gte=now - timedelta(days=7)).count(),
-            "last_30d": v_qs.filter(requested_at__gte=now - timedelta(days=30)).count(),
+            **base,
+            "window_days": days,
+            "start_date": start_date,
+            "end_date": end_date,
+            "series": series,
         }
-        data = LabelStatsSerializer(payload).data
-        return Response(data, status=status.HTTP_200_OK)
+        return Response(LabelStatsWithSeriesSerializer(payload).data, status=status.HTTP_200_OK)
