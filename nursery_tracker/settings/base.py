@@ -150,7 +150,14 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Nursery Tracker API",
     "DESCRIPTION": "Backend API for nursery tracking (backend-first build).",
     "VERSION": "0.1.0",
-    "SERVERS": [{"url": "http://127.0.0.1:8000", "description": "Local Dev"}],
+    # Advertise both the current surface (root) and the /api/v1/ mirror.
+    "SERVERS": [
+        {"url": "http://127.0.0.1:8000", "description": "Local Dev"},
+        {"url": "/", "description": "Current"},
+        {"url": "/api/v1/", "description": "v1 mirror"},
+    ],
+    # Auto-resolve any residual operationId duplicates by suffixing (prevents warnings).
+    "OPERATION_ID_DUPLICATE_MODE": "suffix",
     "CONTACT": {"name": "Nursery Tracker", "email": "dev@example.com"},
     "LICENSE": {"name": "MIT"},
     "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},

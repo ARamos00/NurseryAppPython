@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+from nursery.models import Taxon, Plant
+
+
+class ApiVersioningSmokeTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="v1", password="pw")
+        self.client = APIClient()
+        self.client.login(username="v1", password="pw")
+
+    def test_v1_taxa_list_smoke(self):
+        # Seed a couple taxa
+        Taxon.objects.create(user=self.user, scientific_name="Acer palmatum")
+        Taxon.objects.create(user=self.user, scientific_name="Quercus robur")
+
+        r = self.client.get("/api/v1/taxa/")
+        self.assertEqual(r.status_code, 200, r.content)
+        # PageNumberPagination shape
+        self.assertIn("results", r.data)
+        self.assertGreaterEqual(r.data["count"], 2)
+
+    def test_v1_labels_create_smoke(self):
+        # Minimal plant target so we can create a label
+        t = Taxon.objects.create(user=self.user, scientific_name="Pinus sylvestris")
+        p = Plant.objects.create(user=self.user, taxon=t, quantity=1)
+
+        r = self.client.post(
+            "/api/v1/labels/",
+            {"target": {"type": "plant", "id": p.id}},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertIn("token", r.data)
+        self.assertIn("public_url", r.data)
+        self.assertIn("/p/", r.data["public_url"])
+
+    def test_v1_events_export_json_smoke(self):
+        r = self.client.get("/api/v1/events/export/?format=json")
+        self.assertEqual(r.status_code, 200, r.content)

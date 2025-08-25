@@ -10,6 +10,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
+# ViewSets (router-driven)
 from nursery.api import (
     TaxonViewSet,
     PlantMaterialViewSet,
@@ -17,15 +18,33 @@ from nursery.api import (
     PlantViewSet,
     EventViewSet,
     WizardSeedViewSet,
-    WebhookEndpointViewSet, WebhookDeliveryViewSet,
+    WebhookEndpointViewSet,
+    WebhookDeliveryViewSet,
 )
 from nursery.api.labels import LabelViewSet
 from nursery.api.audit import AuditLogViewSet
+
+# Standalone APIViews (canonical, non-versioned)
 from nursery.api.imports import TaxaImportView, MaterialsImportView, PlantsImportView
 from nursery.api.reports import InventoryReportView, ProductionReportView
 from nursery.exports import EventsExportView
+
+# v1 aliases with method-level schema annotations
+from nursery.api.v1_aliases import (
+    EventsExportV1View,
+    InventoryReportV1View,
+    ProductionReportV1View,
+    TaxaImportV1View,
+    MaterialsImportV1View,
+    PlantsImportV1View,
+)
+
+# Public pages
 from nursery.public_views import PublicLabelView
 
+# ---------------------------------------------------------------------
+# Router for current (non-versioned) API
+# ---------------------------------------------------------------------
 router = DefaultRouter()
 router.register(r"taxa", TaxonViewSet, basename="taxon")
 router.register(r"materials", PlantMaterialViewSet, basename="plantmaterial")
@@ -38,6 +57,9 @@ router.register(r"audit", AuditLogViewSet, basename="audit")
 router.register(r"webhooks/endpoints", WebhookEndpointViewSet, basename="wh-endpoint")
 router.register(r"webhooks/deliveries", WebhookDeliveryViewSet, basename="wh-delivery")
 
+# ---------------------------------------------------------------------
+# URL patterns
+# ---------------------------------------------------------------------
 urlpatterns = [
     path("admin/", admin.site.urls),
 
@@ -46,22 +68,30 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 
-    # ---- Standalone endpoints must come BEFORE the router include ----
-    # Events export (canonical)
+    # Canonical standalone endpoints (current)
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
-
-    # Reports
     path("api/reports/inventory/", InventoryReportView.as_view(), name="report-inventory"),
     path("api/reports/production/", ProductionReportView.as_view(), name="report-production"),
-
-    # Imports
     path("api/imports/taxa/", TaxaImportView.as_view(), name="import-taxa"),
     path("api/imports/materials/", MaterialsImportView.as_view(), name="import-materials"),
     path("api/imports/plants/", PlantsImportView.as_view(), name="import-plants"),
 
-    # Public label page (by token)
+    # Public label page
     path("p/<slug:token>/", PublicLabelView.as_view(), name="label-public"),
 
-    # Router-driven CRUD/API
+    # Router-driven API (current)
     path("api/", include(router.urls)),
+
+    # --------------------------
+    # API v1 (frozen surface)
+    # --------------------------
+    path("api/v1/events/export/", EventsExportV1View.as_view(), name="event-export-v1"),
+    path("api/v1/reports/inventory/", InventoryReportV1View.as_view(), name="report-inventory-v1"),
+    path("api/v1/reports/production/", ProductionReportV1View.as_view(), name="report-production-v1"),
+    path("api/v1/imports/taxa/", TaxaImportV1View.as_view(), name="import-taxa-v1"),
+    path("api/v1/imports/materials/", MaterialsImportV1View.as_view(), name="import-materials-v1"),
+    path("api/v1/imports/plants/", PlantsImportV1View.as_view(), name="import-plants-v1"),
+
+    # v1 router-driven endpoints
+    path("api/v1/", include((router.urls, "api_v1"), namespace="api_v1")),
 ]
