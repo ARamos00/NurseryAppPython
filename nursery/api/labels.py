@@ -4,6 +4,7 @@ import hashlib
 import io
 import secrets
 from datetime import timedelta, date
+from xml.etree import ElementTree as ET
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -26,15 +27,20 @@ from nursery.models import Label, LabelToken, LabelVisit
 from nursery.serializers import (
     LabelSerializer,
     LabelCreateSerializer,
-    LabelStatsSerializer,             # legacy counts-only
-    LabelStatsQuerySerializer,        # ?days=...
-    LabelVisitSeriesPointSerializer,  # per-day points
-    LabelStatsWithSeriesSerializer,   # full payload when days provided
+    LabelStatsSerializer,
+    LabelStatsQuerySerializer,
+    LabelVisitSeriesPointSerializer,
+    LabelStatsWithSeriesSerializer,
 )
 
 # QR code (SVG) generation
 import qrcode
 from qrcode.image.svg import SvgImage
+
+SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+ET.register_namespace("", SVG_NS)
+ET.register_namespace("xlink", XLINK_NS)
 
 
 IDEMPOTENCY_PARAM = OpenApiParameter(
@@ -59,8 +65,11 @@ def _new_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def _qr_svg_bytes(text: str) -> bytes:
-    """Generate an SVG QR image for `text` (absolute URL)."""
+def _qr_svg_bytes(text: str, *, link_url: str | None = None) -> bytes:
+    """
+    Generate an SVG QR image for `text` (absolute URL).
+    If link_url is provided, wrap all <svg> children in <a xlink:href="...">.
+    """
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
@@ -72,7 +81,30 @@ def _qr_svg_bytes(text: str) -> bytes:
     img = qr.make_image(image_factory=SvgImage)
     buf = io.BytesIO()
     img.save(buf)
-    return buf.getvalue()
+    svg_bytes = buf.getvalue()
+
+    if not link_url:
+        return svg_bytes
+
+    try:
+        root = ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        return svg_bytes
+
+    if root.tag != f"{{{SVG_NS}}}svg":
+        return svg_bytes
+
+    a_el = ET.Element(f"{{{SVG_NS}}}a")
+    a_el.set(f"{{{XLINK_NS}}}href", link_url)
+    a_el.set("target", "_blank")
+
+    children = list(root)
+    for child in children:
+        root.remove(child)
+        a_el.append(child)
+    root.append(a_el)
+
+    return ET.tostring(root, encoding="utf-8", method="xml")
 
 
 class LabelViewSet(viewsets.ModelViewSet):
@@ -93,7 +125,7 @@ class LabelViewSet(viewsets.ModelViewSet):
       - POST /api/labels/{id}/rotate/  -> 200 with {token, public_url, ...}
       - POST /api/labels/{id}/revoke/  -> 200 {"revoked": true}
       - GET  /api/labels/{id}/stats/   -> 200 owner-only analytics
-      - GET  /api/labels/{id}/qr/?token=<RAW> -> 200 SVG (owner-only; no-store)
+      - GET  /api/labels/{id}/qr/?token=<RAW> -> 200 SVG (owner-only; no-store; clickable)
     """
 
     permission_classes = [IsAuthenticated, IsOwner]
@@ -104,9 +136,6 @@ class LabelViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "updated_at"]
     ordering = ["-created_at"]
 
-    # ----------------------------
-    # Queryset / serializer wiring
-    # ----------------------------
     def get_queryset(self):
         qs = super().get_queryset()
         user = getattr(self.request, "user", None)
@@ -119,11 +148,7 @@ class LabelViewSet(viewsets.ModelViewSet):
             return LabelCreateSerializer
         return LabelSerializer
 
-    # ----------------------------
-    # Helpers
-    # ----------------------------
     def _issue_token(self, label: Label) -> tuple[LabelToken, str]:
-        """Create a new token row for label and return (row, raw_token)."""
         raw = _new_token()
         token = LabelToken.objects.create(
             label=label,
@@ -133,7 +158,6 @@ class LabelViewSet(viewsets.ModelViewSet):
         return token, raw
 
     def _revoke_active(self, label: Label) -> None:
-        """Mark the active token (if any) as revoked without altering label.active_token."""
         if label.active_token_id:
             LabelToken.objects.filter(
                 pk=label.active_token_id,
@@ -141,13 +165,9 @@ class LabelViewSet(viewsets.ModelViewSet):
             ).update(revoked_at=timezone.now())
 
     def _public_url(self, request: Request, raw_token: str) -> str:
-        """Absolute URL to the public page for a given raw token."""
         url = reverse("label-public", kwargs={"token": raw_token})
         return request.build_absolute_uri(url)
 
-    # ----------------------------
-    # CRUD / Actions
-    # ----------------------------
     @extend_schema(
         tags=["Labels"],
         parameters=[IDEMPOTENCY_PARAM],
@@ -157,17 +177,12 @@ class LabelViewSet(viewsets.ModelViewSet):
     )
     @idempotent
     def create(self, request: Request, *args, **kwargs) -> Response:
-        """
-        Creates (or reuses) a Label for the given target and rotates a fresh token.
-        If a label already exists and ?force=true is not provided, returns 409.
-        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         target_obj = serializer.validated_data["target"]
         ct = ContentType.objects.get_for_model(type(target_obj))
 
-        # Enforce single label per (user,target)
         existing = Label.objects.filter(
             user=request.user,
             content_type=ct,
@@ -185,12 +200,10 @@ class LabelViewSet(viewsets.ModelViewSet):
                 content_type=ct,
                 object_id=target_obj.pk,
             )
-            # lock the row if it already existed to avoid rotate races
             if label.pk and existing:
                 label = Label.objects.select_for_update().get(pk=label.pk)
 
             token, raw = self._issue_token(label)
-            # revoke previous and set new active token
             if label.active_token_id and label.active_token_id != token.id:
                 self._revoke_active(label)
             label.active_token = token
@@ -201,11 +214,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         out["public_url"] = self._public_url(request, raw)
         return Response(out, status=status.HTTP_201_CREATED)
 
-    @extend_schema(
-        tags=["Labels"],
-        responses={200: LabelSerializer},
-        description="Retrieve a label. Does not return raw token.",
-    )
+    @extend_schema(tags=["Labels"], responses={200: LabelSerializer}, description="Retrieve a label.")
     def retrieve(self, request: Request, *args, **kwargs) -> Response:
         return super().retrieve(request, *args, **kwargs)
 
@@ -220,9 +229,7 @@ class LabelViewSet(viewsets.ModelViewSet):
     def rotate(self, request: Request, pk: str | None = None) -> Response:
         label = self.get_object()
         with transaction.atomic():
-            # lock the label row to serialize rotations
             label = Label.objects.select_for_update().get(pk=label.pk)
-
             token, raw = self._issue_token(label)
             if label.active_token_id and label.active_token_id != token.id:
                 self._revoke_active(label)
@@ -243,9 +250,7 @@ class LabelViewSet(viewsets.ModelViewSet):
     def revoke(self, request: Request, pk: str | None = None) -> Response:
         label = self.get_object()
         with transaction.atomic():
-            # lock to serialize concurrent revocations
             label = Label.objects.select_for_update().get(pk=label.pk)
-
             self._revoke_active(label)
             if label.active_token_id:
                 label.active_token = None
@@ -266,7 +271,8 @@ class LabelViewSet(viewsets.ModelViewSet):
         description=(
             "Return an SVG QR that encodes the public URL for this label's *raw* token. "
             "Requires `?token=<RAW>` for the **current active token** of this label. "
-            "Response is **not cacheable** (no-store)."
+            "Response is **not cacheable** (no-store). The SVG is fully clickable and "
+            "opens the encoded URL in a new tab."
         ),
     )
     @action(detail=True, methods=["get"], url_path="qr")
@@ -281,7 +287,7 @@ class LabelViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Invalid token for this label."}, status=status.HTTP_403_FORBIDDEN)
 
         url = self._public_url(request, raw)
-        svg = _qr_svg_bytes(url)
+        svg = _qr_svg_bytes(url, link_url=url)
 
         resp = HttpResponse(svg, content_type="image/svg+xml; charset=utf-8")
         # Owner QR should never be cached

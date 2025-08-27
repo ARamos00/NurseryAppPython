@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 from typing import Optional
+from xml.etree import ElementTree as ET
 
 from django.http import HttpResponse
 from django.urls import reverse
@@ -19,6 +20,11 @@ from nursery.models import LabelToken, LabelVisit
 # QR code (SVG) generation
 import qrcode
 from qrcode.image.svg import SvgImage
+
+SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+ET.register_namespace("", SVG_NS)
+ET.register_namespace("xlink", XLINK_NS)
 
 
 def _hash_token(raw: str) -> str:
@@ -39,10 +45,11 @@ def _client_ip(request) -> Optional[str]:
     return request.META.get("REMOTE_ADDR") or None
 
 
-def _qr_svg_bytes(text: str) -> bytes:
+def _qr_svg_bytes(text: str, *, link_url: Optional[str] = None) -> bytes:
     """
     Produce an SVG QR for the given text (absolute URL).
-    Returns raw SVG bytes.
+    If link_url is provided, wrap all <svg> children in a clickable <a> element.
+    Returns raw SVG bytes (UTF-8).
     """
     qr = qrcode.QRCode(
         version=None,  # fit automatically
@@ -55,8 +62,34 @@ def _qr_svg_bytes(text: str) -> bytes:
     img = qr.make_image(image_factory=SvgImage)  # full <svg> document
     buf = io.BytesIO()
     img.save(buf)
-    return buf.getvalue()
+    svg_bytes = buf.getvalue()
 
+    if not link_url:
+        return svg_bytes
+
+    # Parse and wrap children under <a xlink:href="..."> safely to avoid malformed XML.
+    try:
+        root = ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        # Fallback to non-clickable if parsing fails for any reason
+        return svg_bytes
+
+    # Ensure root is <svg>
+    if root.tag != f"{{{SVG_NS}}}svg":
+        return svg_bytes
+
+    a_el = ET.Element(f"{{{SVG_NS}}}a")
+    a_el.set(f"{{{XLINK_NS}}}href", link_url)
+    a_el.set("target", "_blank")
+
+    # Move all existing children under <a>
+    children = list(root)
+    for child in children:
+        root.remove(child)
+        a_el.append(child)
+    root.append(a_el)
+
+    return ET.tostring(root, encoding="utf-8", method="xml")
 
 @extend_schema(exclude=True)  # exclude from OpenAPI schema (APIView without serializer)
 class PublicLabelQRView(APIView):
@@ -66,6 +99,7 @@ class PublicLabelQRView(APIView):
     - Purely encodes the public URL `/p/<token>/`.
     - **Immutable**: long-lived cache headers; strong ETag; supports If-None-Match.
     - Throttled via `label-public` scope.
+    - Clickable: the entire SVG links to the encoded public URL.
     """
     permission_classes = [AllowAny]
     throttle_scope = "label-public"
@@ -85,7 +119,7 @@ class PublicLabelQRView(APIView):
             resp["Content-Type"] = "image/svg+xml; charset=utf-8"
             return resp
 
-        svg = _qr_svg_bytes(url)
+        svg = _qr_svg_bytes(url, link_url=url)
         resp = HttpResponse(svg, content_type="image/svg+xml; charset=utf-8")
         resp["ETag"] = etag
         resp["Cache-Control"] = "public, max-age=31536000, immutable"
