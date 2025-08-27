@@ -41,6 +41,7 @@ class PublicLabelView(APIView):
     - Renders HTML via TemplateHTMLRenderer.
     - Accepts either a *full raw token* (hash match) or the 12-char *prefix*.
     - Records a LabelVisit for analytics.
+    - If the target object is archived (soft-deleted), respond 404.
     """
     permission_classes = [AllowAny]
     renderer_classes = [TemplateHTMLRenderer]
@@ -75,6 +76,10 @@ class PublicLabelView(APIView):
 
         label = lt.label
         target = label.target  # GenericFK
+
+        # Stop resolving if the target has been archived (soft-deleted)
+        if hasattr(target, "is_deleted") and getattr(target, "is_deleted", False):
+            return Response({"status": "not_found"}, status=404, template_name=self.template_name)
 
         # Record a visit (owned by the label's owner to preserve per-tenant analytics)
         LabelVisit.objects.create(

@@ -1,13 +1,57 @@
+from __future__ import annotations
+
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, URLValidator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q, Sum
 from django.utils import timezone
 
+# Owned base from core
 from core.models import OwnedModel
 
+# -----------------------------------------------------------------------------
+# Soft-delete support (for selected models)
+# -----------------------------------------------------------------------------
+class OwnedQuerySet(models.QuerySet):
+    """
+    NOTE: This local alias exists to support type hints for SoftDeleteQuerySet
+    that extend core's OwnedModel queryset helpers in a model-specific file.
+    """
+    def for_user(self, user):
+        if user is None or not getattr(user, "is_authenticated", False):
+            return self.none()
+        return self.filter(user=user)
 
+    # Alias for readability
+    def owned(self, user):
+        return self.for_user(user)
+
+
+class SoftDeleteQuerySet(OwnedQuerySet):
+    def alive(self):
+        return self.filter(is_deleted=False)
+
+    def deleted(self):
+        return self.filter(is_deleted=True)
+
+
+# Manager that hides deleted rows by default
+SoftDeleteManagerBase = models.Manager.from_queryset(SoftDeleteQuerySet)
+
+
+class SoftDeleteManager(SoftDeleteManagerBase):
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+
+# Manager that shows all rows (including deleted)
+AllRowsManager = models.Manager.from_queryset(SoftDeleteQuerySet)
+
+# -----------------------------------------------------------------------------
+# Domain models
+# -----------------------------------------------------------------------------
 class Taxon(OwnedModel):
     scientific_name = models.CharField(max_length=200)
     cultivar = models.CharField(max_length=100, blank=True)
@@ -104,12 +148,21 @@ class PropagationBatch(OwnedModel):
     quantity_started = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     notes = models.TextField(blank=True)
 
+    # Soft-delete
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    # Managers
+    objects = SoftDeleteManager()
+    objects_all = AllRowsManager()
+
     class Meta:
         ordering = ["-started_on", "-created_at"]
         indexes = [
             models.Index(fields=["user", "status"]),
             models.Index(fields=["user", "material"]),
             models.Index(fields=["user", "started_on"]),
+            models.Index(fields=["user", "is_deleted"]),
         ]
 
     def __str__(self) -> str:
@@ -145,11 +198,20 @@ class Plant(OwnedModel):
     acquired_on = models.DateField(default=timezone.now)  # consider timezone.localdate later
     notes = models.TextField(blank=True)
 
+    # Soft-delete
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    # Managers
+    objects = SoftDeleteManager()
+    objects_all = AllRowsManager()
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["user", "taxon"]),
             models.Index(fields=["user", "status"]),
+            models.Index(fields=["user", "is_deleted"]),
         ]
 
     def __str__(self) -> str:
@@ -350,18 +412,17 @@ class AuditLog(models.Model):
         return f"AuditLog<{self.action} {self.content_type.app_label}.{self.content_type.model}:{self.object_id}>"
 
 
-from django.core.validators import URLValidator
-from django.core.exceptions import ValidationError as DjangoValidationError
-
 class WebhookEventType(models.TextChoices):
     EVENT_CREATED = "event.created", "Event created"
     PLANT_STATUS_CHANGED = "plant.status_changed", "Plant status changed"
     BATCH_STATUS_CHANGED = "batch.status_changed", "Batch status changed"
 
+
 class WebhookDeliveryStatus(models.TextChoices):
     QUEUED = "QUEUED", "Queued"
     SENT = "SENT", "Sent"
     FAILED = "FAILED", "Failed"
+
 
 class WebhookEndpoint(OwnedModel):
     """
@@ -391,9 +452,6 @@ class WebhookEndpoint(OwnedModel):
 
     def clean(self):
         super().clean()
-        # App-level HTTPS enforcement happens in serializer (has settings access).
-        # Keep model clean permissive (so tests/dev can store http:// if allowed).
-
         # Validate URL shape early
         try:
             URLValidator()(self.url)

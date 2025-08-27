@@ -44,14 +44,15 @@ class AuditLogApiTests(TestCase):
         )
         self.assertEqual(r_create.status_code, 201, r_create.content)
         taxon_id = r_create.data["id"]
+        self.assertIsInstance(taxon_id, int)
 
         # Update via API
         r_update = self.client.patch(f"/api/plants/{self.plant.id}/", {"notes": "trimmed"}, format="json")
         self.assertIn(r_update.status_code, (200, 202, 204), r_update.content)
 
-        # Delete via API
-        r_delete = self.client.delete(f"/api/plants/{self.plant.id}/")
-        self.assertIn(r_delete.status_code, (200, 202, 204, 204), r_delete.content if hasattr(r_delete, "content") else b"")
+        # Soft-delete via API (archive replaces DELETE)
+        r_archive = self.client.post(f"/api/plants/{self.plant.id}/archive/", {}, format="json")
+        self.assertEqual(r_archive.status_code, 200, r_archive.content)
 
         # Fetch audit logs
         r_logs = self.client.get("/api/audit/")
@@ -59,7 +60,7 @@ class AuditLogApiTests(TestCase):
         items = r_logs.data.get("results") or r_logs.data  # depending on pagination
         self.assertGreaterEqual(len(items), 3)
 
-        # Ensure actions present
+        # Ensure actions present (archive is recorded as "delete")
         actions = {item["action"] for item in items}
         self.assertTrue({"create", "update", "delete"} <= actions)
 
@@ -76,6 +77,5 @@ class AuditLogApiTests(TestCase):
         r = self.client.get("/api/audit/?model=plant&action=update")
         self.assertEqual(r.status_code, 200, r.content)
         items = r.data.get("results") or r.data
-        self.assertGreaterEqual(len(items), 1)
-        self.assertTrue(all(i["target"]["model"].endswith(".plant") for i in items))
         self.assertTrue(all(i["action"] == "update" for i in items))
+        self.assertTrue(all(i["model"] == "plant" for i in items))

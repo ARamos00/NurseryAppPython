@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from django.contrib.contenttypes.models import ContentType
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from core.permissions import IsOwner
 from nursery.models import (
@@ -71,7 +72,7 @@ class OwnedModelViewSet(ETagConcurrencyMixin, viewsets.ModelViewSet):
         # Capture "before" snapshot from DB to detect real changes
         model = serializer.Meta.model
         pk = self.get_object().pk  # call get_object once to respect IsOwner
-        before_obj = model.objects.get(pk=pk)
+        before_obj = model.objects_all.get(pk=pk) if hasattr(model, "objects_all") else model.objects.get(pk=pk)
         before = _snapshot_model(before_obj)
 
         instance = serializer.save()
@@ -122,6 +123,11 @@ class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
     ordering_fields = ["started_on", "created_at", "updated_at", "quantity_started", "status"]
     ordering = ["-started_on", "-created_at"]
 
+    # Disallow hard DELETE; use /archive/ action instead.
+    def destroy(self, request, *args, **kwargs):
+        return Response({"detail": "Hard delete is disabled. Use POST /api/batches/{id}/archive/."},
+                        status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
 
 class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
     lookup_value_regex = r"\d+"
@@ -131,6 +137,11 @@ class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
     search_fields = ["taxon__scientific_name", "taxon__cultivar", "taxon__clone_code"]
     ordering_fields = ["created_at", "updated_at", "acquired_on", "quantity", "status"]
     ordering = ["-created_at"]
+
+    # Disallow hard DELETE; use /archive/ action instead.
+    def destroy(self, request, *args, **kwargs):
+        return Response({"detail": "Hard delete is disabled. Use POST /api/plants/{id}/archive/."},
+                        status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 class EventViewSet(OwnedModelViewSet):

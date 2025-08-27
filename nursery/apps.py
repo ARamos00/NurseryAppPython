@@ -24,6 +24,8 @@ class NurseryConfig(AppConfig):
           `dispatch_uid`, so repeated imports are safe and idempotent.
         """
         self._import_startup_module("nursery.signals", required=True)
+        # NEW: load audit hooks so soft-delete emits a DELETE audit entry.
+        self._import_startup_module("nursery.audit_hooks", required=True)
         self._import_startup_module("nursery.schema", required=False)
 
     @staticmethod

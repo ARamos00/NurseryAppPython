@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Optional  # may be used by other ops in this module
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -21,8 +21,9 @@ from nursery.models import (
     PlantStatus,
     Event,
     EventType,
+    Label,
+    LabelToken,
 )
-
 
 # ---------- Serializer definitions (local to ops) ----------
 
@@ -56,7 +57,6 @@ class CompleteResponseSerializer(serializers.Serializer):
     batch_id = serializers.IntegerField()
     batch_status = serializers.ChoiceField(choices=BatchStatus.choices)
 
-
 IF_MATCH_PARAM = OpenApiParameter(
     name="If-Match",
     type=str,
@@ -64,7 +64,6 @@ IF_MATCH_PARAM = OpenApiParameter(
     required=False,
     description='Optimistic concurrency: send the ETag from the last GET to avoid lost updates.',
 )
-
 
 # ---------- Mixin with actions ----------
 
@@ -74,7 +73,8 @@ class BatchOpsMixin:
       - harvest: promote quantity from batch into a Plant
       - cull: reduce remaining quantity on batch
       - complete: close batch when no remaining quantity (or force)
-    All actions write Events to maintain derived availability.
+      - archive: soft-delete the batch and revoke labels
+    All actions write Events to maintain derived availability where appropriate.
     """
 
     @extend_schema(
@@ -89,7 +89,7 @@ class BatchOpsMixin:
     )
     @action(detail=True, methods=["post"], url_path="harvest")
     @idempotent
-    def harvest(self, request: Request, pk: str = None) -> Response:
+    def harvest(self, request: Request, pk: str | None = None) -> Response:
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -137,8 +137,6 @@ class BatchOpsMixin:
                 quantity_delta=qty,
             )
 
-        # Optionally auto-progress status
-        # (do not auto-complete here; completion is explicit)
         response = Response(
             {
                 "plant_id": plant.id,
@@ -167,7 +165,7 @@ class BatchOpsMixin:
     )
     @action(detail=True, methods=["post"], url_path="cull")
     @idempotent
-    def cull(self, request: Request, pk: str = None) -> Response:
+    def cull(self, request: Request, pk: str | None = None) -> Response:
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -211,13 +209,11 @@ class BatchOpsMixin:
         parameters=[IF_MATCH_PARAM],
         request=CompleteRequestSerializer,
         responses={200: CompleteResponseSerializer},
-        description=(
-            "Mark a batch as COMPLETED. Requires zero remaining quantity unless `force=true`."
-        ),
+        description="Mark a batch as COMPLETED. Requires zero remaining quantity unless `force=true`.",
     )
     @action(detail=True, methods=["post"], url_path="complete")
     @idempotent
-    def complete(self, request: Request, pk: str = None) -> Response:
+    def complete(self, request: Request, pk: str | None = None) -> Response:
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -236,11 +232,66 @@ class BatchOpsMixin:
             batch.status = BatchStatus.COMPLETED
             batch.save(update_fields=["status", "updated_at"])
 
-        response = Response(
-            {"batch_id": batch.id, "batch_status": batch.status},
-            status=status.HTTP_200_OK,
-        )
+        response = Response({"batch_id": batch.id, "batch_status": batch.status}, status=status.HTTP_200_OK)
         etag = compute_etag(batch.updated_at)
         if etag:
             response["ETag"] = etag
         return response
+
+    # -------- Archive (soft-delete) -------------------------------------------
+
+    class _ArchiveResponse(serializers.Serializer):
+        id = serializers.IntegerField()
+        archived = serializers.BooleanField()
+        deleted_at = serializers.DateTimeField()
+
+        class Meta:
+            # Unique component name for OpenAPI to avoid collisions
+            ref_name = "BatchArchiveResponse"
+
+    @extend_schema(
+        tags=["Batches: Ops"],
+        parameters=[IF_MATCH_PARAM],
+        responses={200: _ArchiveResponse},
+        description=(
+            "Soft-delete (archive) this batch. Sets is_deleted=true and deleted_at now. "
+            "Revokes any active label token so the public page stops resolving. "
+            "Idempotent: repeated calls are safe."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="archive")
+    @idempotent
+    def archive(self, request: Request, pk: str | None = None) -> Response:
+        batch: PropagationBatch = self.get_object()
+        require_if_match(request, batch.updated_at)
+
+        if batch.is_deleted:
+            return Response(
+                {"id": batch.id, "archived": True, "deleted_at": batch.deleted_at},
+                status=status.HTTP_200_OK,
+            )
+
+        with transaction.atomic():
+            batch.is_deleted = True
+            batch.deleted_at = timezone.now()
+            batch.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+
+            # Revoke active label token if present
+            ct = ContentType.objects.get_for_model(PropagationBatch)
+            label = (
+                Label.objects
+                .select_related("active_token")
+                .filter(user=request.user, content_type=ct, object_id=batch.id)
+                .first()
+            )
+            if label and label.active_token_id:
+                LabelToken.objects.filter(pk=label.active_token_id, revoked_at__isnull=True).update(
+                    revoked_at=timezone.now()
+                )
+                label.active_token = None
+                label.save(update_fields=["active_token", "updated_at"])
+
+        return Response(
+            {"id": batch.id, "archived": True, "deleted_at": batch.deleted_at},
+            status=status.HTTP_200_OK,
+        )

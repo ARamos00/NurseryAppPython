@@ -2,17 +2,30 @@ from __future__ import annotations
 
 from typing import List, Dict
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from core.utils.concurrency import require_if_match
 from core.utils.idempotency import idempotent
-from nursery.models import Plant, PlantStatus, Event, EventType
+from nursery.models import (
+    Plant,
+    PlantStatus,
+    Event,
+    EventType,
+    Label,
+    LabelToken,
+)
 
+# -----------------------------------------------------------------------------
+# Bulk status change
+# -----------------------------------------------------------------------------
 
 class BulkStatusRequestSerializer(serializers.Serializer):
     ids = serializers.ListField(
@@ -41,11 +54,21 @@ STATUS_TO_EVENT = {
     PlantStatus.DEAD: EventType.DISCARD,
 }
 
+# Common OpenAPI header param for concurrency
+IF_MATCH_PARAM = OpenApiParameter(
+    name="If-Match",
+    type=str,
+    required=False,
+    location=OpenApiParameter.HEADER,
+    description="Optimistic concurrency: send the ETag from the last GET to avoid lost updates.",
+)
+
 
 class PlantOpsMixin:
     """
-    Adds bulk ops to PlantViewSet:
+    Adds ops to PlantViewSet:
       - POST /api/plants/bulk/status/
+      - POST /api/plants/{id}/archive/
     """
 
     @extend_schema(
@@ -99,5 +122,66 @@ class PlantOpsMixin:
                 "event_ids": event_ids,
                 "count_updated": len(updated_ids),
             },
+            status=status.HTTP_200_OK,
+        )
+
+    # -----------------------------------------------------------------------------
+    # Archive (soft-delete)
+    # -----------------------------------------------------------------------------
+
+    class _ArchiveResponse(serializers.Serializer):
+        id = serializers.IntegerField()
+        archived = serializers.BooleanField()
+        deleted_at = serializers.DateTimeField()
+
+        class Meta:
+            # Unique component name for OpenAPI to avoid collisions
+            ref_name = "PlantArchiveResponse"
+
+    @extend_schema(
+        tags=["Plants: Ops"],
+        parameters=[IF_MATCH_PARAM],
+        responses={200: _ArchiveResponse},
+        description=(
+            "Soft-delete (archive) this plant. Sets is_deleted=true and deleted_at now. "
+            "Revokes any active label token so the public page stops resolving. "
+            "Idempotent: repeated calls are safe."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="archive")
+    @idempotent
+    def archive(self, request: Request, pk: str | None = None) -> Response:
+        plant: Plant = self.get_object()
+        # Concurrency guard (no-op if ENFORCE_IF_MATCH=False)
+        require_if_match(request, plant.updated_at)
+
+        if plant.is_deleted:
+            return Response(
+                {"id": plant.id, "archived": True, "deleted_at": plant.deleted_at},
+                status=status.HTTP_200_OK,
+            )
+
+        with transaction.atomic():
+            plant.is_deleted = True
+            plant.deleted_at = timezone.now()
+            plant.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+
+            # Revoke active label token if present
+            ct = ContentType.objects.get_for_model(Plant)
+            label = (
+                Label.objects
+                .select_related("active_token")
+                .filter(user=request.user, content_type=ct, object_id=plant.id)
+                .first()
+            )
+            if label and label.active_token_id:
+                LabelToken.objects.filter(pk=label.active_token_id, revoked_at__isnull=True).update(
+                    revoked_at=timezone.now()
+                )
+                label.active_token = None
+                label.save(update_fields=["active_token", "updated_at"])
+
+        return Response(
+            {"id": plant.id, "archived": True, "deleted_at": plant.deleted_at},
             status=status.HTTP_200_OK,
         )
