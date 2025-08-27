@@ -1,3 +1,24 @@
+"""
+Core middleware for request safety and observability.
+
+Components
+----------
+- `RequestSizeLimitMiddleware`:
+    * Rejects large request bodies early with a pre-rendered 413 JSON response.
+    * Applies to POST/PUT/PATCH only and relies on `Content-Length` when present.
+    * Limit is configurable via `MAX_REQUEST_BYTES` (default 2,000,000 bytes).
+
+- `RequestIDLogMiddleware`:
+    * Reads `X-Request-ID` (or generates one) and reflects it in the response.
+    * Stores the id in a contextvar for use by `core.logging.RequestIDFilter`.
+    * Logs one structured line per request including latency (ms) and user id.
+
+Security & UX
+-------------
+- The request-size rejection uses a DRF `Response` rendered to JSON so tests and
+  clients get consistent error shapes. CSRF remains enabled upstream.
+"""
+
 from __future__ import annotations
 
 import logging

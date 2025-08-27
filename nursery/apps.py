@@ -1,3 +1,22 @@
+"""
+AppConfig for the `nursery` domain app.
+
+Startup responsibilities
+------------------------
+- Import **signals** at startup (required): label lifecycle handlers and optional
+  webhook emitters depend on these to keep invariants (e.g., revoking tokens on
+  terminal status changes).
+- Import **audit_hooks** at startup (required): ensures model lifecycle events
+  (including soft-delete) record audit entries.
+- Import **schema** (optional): drf-spectacular OpenAPI tweaks. In DEBUG we still
+  surface errors to catch schema issues early.
+
+Reliability notes
+-----------------
+- Django’s autoreloader may call `ready()` multiple times; all receivers use
+  `dispatch_uid`, and imports are idempotent, so repeated calls are safe.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -10,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class NurseryConfig(AppConfig):
+    """Primary app configuration for Nursery domain models and APIs."""
     default_auto_field = "django.db.models.BigAutoField"
     name = "nursery"
 

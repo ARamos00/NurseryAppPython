@@ -1,3 +1,27 @@
+"""Domain signals: label lifecycle and webhook emitters (feature-flagged).
+
+Label lifecycle
+---------------
+- On Plant status transitions to a terminal state (SOLD/DEAD/DISCARDED), revoke
+  active label tokens so public pages stop resolving.
+- On deletion of Plant / PropagationBatch / PlantMaterial, delete their labels.
+- Helpers are idempotent; revocation and deletes are safe to call repeatedly.
+
+Webhooks (optional)
+-------------------
+- Feature-flagged via `WEBHOOKS_ENABLE_AUTO_EMIT` (default False). When enabled:
+    * Event created -> enqueue `event.created`
+    * Plant status change -> enqueue `plant.status_changed`
+    * Batch status change -> enqueue `batch.status_changed`
+- `enqueue_for_user()` creates QUEUED deliveries only; a separate worker handles
+  HTTPS + signing + retries to keep request latency low.
+
+Security
+--------
+- All webhook payloads are scoped to the record owner (`instance.user`).
+- Do NOT include sensitive fields in payloads; keep them minimal and event-driven.
+"""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -40,6 +64,7 @@ def _revoke_active_token(label: Label) -> None:
 
 
 def _delete_labels_for_target(model_cls, obj_id: int) -> None:
+    """Delete all labels for the given model/primary key pair."""
     ct = ContentType.objects.get_for_model(model_cls)
     Label.objects.filter(content_type=ct, object_id=obj_id).delete()
 
@@ -62,6 +87,7 @@ def plant_status_revoke_labels(sender, instance: Plant, **kwargs):
         # already terminal -> terminal; nothing to do
         return
     if instance.status in terminal:
+        # SECURITY: revoke owner's public tokens eagerly to avoid stale public access.
         ct = ContentType.objects.get_for_model(Plant)
         for label in Label.objects.filter(content_type=ct, object_id=instance.pk):
             _revoke_active_token(label)
@@ -69,16 +95,19 @@ def plant_status_revoke_labels(sender, instance: Plant, **kwargs):
 
 @receiver(post_delete, sender=Plant, dispatch_uid="nursery.labels.plant_delete_cleanup")
 def plant_delete_cleanup_labels(sender, instance: Plant, **kwargs):
+    """Delete labels for a Plant once it's hard-deleted."""
     _delete_labels_for_target(Plant, instance.pk)
 
 
 @receiver(post_delete, sender=PropagationBatch, dispatch_uid="nursery.labels.batch_delete_cleanup")
 def batch_delete_cleanup_labels(sender, instance: PropagationBatch, **kwargs):
+    """Delete labels for a PropagationBatch once it's hard-deleted."""
     _delete_labels_for_target(PropagationBatch, instance.pk)
 
 
 @receiver(post_delete, sender=PlantMaterial, dispatch_uid="nursery.labels.material_delete_cleanup")
 def material_delete_cleanup_labels(sender, instance: PlantMaterial, **kwargs):
+    """Delete labels for a PlantMaterial once it's hard-deleted."""
     _delete_labels_for_target(PlantMaterial, instance.pk)
 
 
@@ -97,6 +126,7 @@ def _auto_emit_enabled() -> bool:
 
 @receiver(post_save, sender=Event, dispatch_uid="nursery.webhooks.event_created")
 def webhook_event_created(sender, instance: Event, created: bool, **kwargs) -> None:
+    """Emit `event.created` when a new Event row is inserted."""
     if not _auto_emit_enabled():
         return
     if not created:
@@ -110,6 +140,7 @@ def webhook_event_created(sender, instance: Event, created: bool, **kwargs) -> N
         "quantity_delta": instance.quantity_delta,
         "notes": instance.notes or "",
     }
+    # WHY: enqueue only; worker handles HTTPS/signing/retries to keep writes fast.
     enqueue_for_user(instance.user, WebhookEventType.EVENT_CREATED, {"event": payload})
 
 
@@ -117,6 +148,7 @@ def webhook_event_created(sender, instance: Event, created: bool, **kwargs) -> N
 
 @receiver(pre_save, sender=Plant, dispatch_uid="nursery.webhooks.plant_capture_old_status")
 def plant_capture_old_status(sender, instance: Plant, **kwargs) -> None:
+    """Capture previous Plant.status for comparison in post_save."""
     # Only capture for updates
     if not instance.pk:
         instance.__old_status = None  # type: ignore[attr-defined]
@@ -130,6 +162,7 @@ def plant_capture_old_status(sender, instance: Plant, **kwargs) -> None:
 
 @receiver(post_save, sender=Plant, dispatch_uid="nursery.webhooks.plant_status_changed")
 def webhook_plant_status_changed(sender, instance: Plant, created: bool, **kwargs) -> None:
+    """Emit `plant.status_changed` on status change (feature-flagged)."""
     if not _auto_emit_enabled():
         return
     old: Optional[str] = getattr(instance, "__old_status", None)  # type: ignore[attr-defined]
@@ -151,6 +184,7 @@ def webhook_plant_status_changed(sender, instance: Plant, created: bool, **kwarg
 
 @receiver(pre_save, sender=PropagationBatch, dispatch_uid="nursery.webhooks.batch_capture_old_status")
 def batch_capture_old_status(sender, instance: PropagationBatch, **kwargs) -> None:
+    """Capture previous PropagationBatch.status for comparison in post_save."""
     if not instance.pk:
         instance.__old_status = None  # type: ignore[attr-defined]
         return
@@ -163,6 +197,7 @@ def batch_capture_old_status(sender, instance: PropagationBatch, **kwargs) -> No
 
 @receiver(post_save, sender=PropagationBatch, dispatch_uid="nursery.webhooks.batch_status_changed")
 def webhook_batch_status_changed(sender, instance: PropagationBatch, created: bool, **kwargs) -> None:
+    """Emit `batch.status_changed` on status change (feature-flagged)."""
     if not _auto_emit_enabled():
         return
     old: Optional[str] = getattr(instance, "__old_status", None)  # type: ignore[attr-defined]

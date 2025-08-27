@@ -1,5 +1,33 @@
 from __future__ import annotations
 
+"""
+Seed development data for the Nursery app.
+
+Goals
+-----
+- Fast local onboarding with realistic yet deterministic sample data.
+- Idempotent-ish: Uses `get_or_create` and targeted updates so re-running keeps
+  data consistent without creating duplicates.
+
+What it creates
+---------------
+- Two users ("alice", "bob") with known passwords for local testing.
+- A set of Taxa, PlantMaterials, PropagationBatches, Plants, and Events with
+  sensible relationships and varied statuses/methods.
+- Size profiles (SMALL|MEDIUM|LARGE) to scale volume.
+
+Safety
+------
+- `--reset` option hard-deletes existing nursery data across all users (be careful).
+- Command wraps the main `handle` in `@transaction.atomic` to keep partial runs
+  from leaving inconsistent state.
+
+Usage
+-----
+    python manage.py dev_seed --size MEDIUM
+    python manage.py dev_seed --reset --size SMALL
+"""
+
 from dataclasses import dataclass
 from typing import Iterable, Tuple
 from django.contrib.auth import get_user_model
@@ -25,7 +53,7 @@ User = get_user_model()
 
 @dataclass(frozen=True)
 class SizeProfile:
-    """How much data to create relative to 'SMALL'."""
+    """Relative scale factors for generated data (baseline is 'SMALL')."""
     taxon_mult: int
     material_per_taxon: int
     batches_per_material: int
@@ -41,9 +69,17 @@ SIZES = {
 
 
 class Command(BaseCommand):
+    """
+    Seed deterministic development data for quick demos and tests.
+
+    Options:
+        --reset  : delete existing nursery data before creating new sample data
+        --size   : SMALL (default), MEDIUM, LARGE
+    """
     help = "Seed development data (idempotent). Use --reset to clear existing nursery data first."
 
     def add_arguments(self, parser: CommandParser) -> None:
+        """Register CLI options."""
         parser.add_argument(
             "--reset",
             action="store_true",
@@ -60,6 +96,18 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        """
+        Main entrypoint.
+
+        Steps:
+            - Optionally reset existing data.
+            - Ensure users and set known passwords.
+            - Generate taxa/materials/batches/plants/events per size profile.
+
+        NOTE:
+            Uses consistent date math so data looks plausible and queries aggregate
+            meaningfully (e.g., monotonic `happened_at` within a timeline).
+        """
         size_key: str = options["size"].upper()
         profile: SizeProfile = SIZES[size_key]
 
@@ -79,7 +127,13 @@ class Command(BaseCommand):
     # Helpers
     # ---------------------------------------------------------------------
     def _reset(self) -> None:
-        # Respect FK cascade order: Event -> Plant/Batch -> Material -> Taxon
+        """
+        Delete existing nursery data in dependency order.
+
+        WHY:
+            Respect FK cascade order: Event -> Plant/Batch -> Material -> Taxon,
+            to avoid foreign key constraint errors during truncation.
+        """
         Event.objects.all().delete()
         Plant.objects.all().delete()
         PropagationBatch.objects.all().delete()
@@ -88,6 +142,12 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING("Existing nursery data deleted."))
 
     def _ensure_users(self) -> Tuple[User, User]:
+        """
+        Ensure two baseline users exist and have known credentials.
+
+        Returns:
+            (alice, bob)
+        """
         alice, _ = User.objects.get_or_create(username="alice", defaults={"is_staff": True, "is_superuser": False})
         alice.set_password("pass12345")
         alice.is_staff = True
@@ -100,6 +160,13 @@ class Command(BaseCommand):
         return alice, bob
 
     def _seed_for_user(self, user: User, profile: SizeProfile, suffix: str) -> None:
+        """
+        Create related data for a single user.
+
+        PERF:
+            Uses `get_or_create` extensively to keep the command idempotent and
+            efficient on re-runs. Updates a minimal set of fields when rows exist.
+        """
         # A small curated list of taxa; we'll multiply it by size profile
         base_taxa: Iterable[Tuple[str, str, str]] = [
             ("Acer palmatum", "Seiryu", ""),
@@ -241,6 +308,10 @@ class Command(BaseCommand):
         """
         Build a repeatable sequence of (event_type, minutes_from_base, quantity_delta, note)
         of length ~n. Quantity deltas are illustrative (+germinated, -losses, etc.).
+
+        NOTE:
+            Minute offsets are strictly increasing to ensure `happened_at` stays
+            monotonic for each synthetic timeline.
         """
         pattern = [
             (EventType.SOW,           0,    +5, "Sowed"),

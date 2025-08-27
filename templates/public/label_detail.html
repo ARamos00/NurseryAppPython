@@ -4,6 +4,22 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Nursery Label</title>
+  <!--
+    Public label template
+
+    Privacy & behavior
+    ------------------
+    - This page does NOT reveal raw tokens; only a short `token_prefix` is shown.
+    - If a label is revoked or the target is archived (soft-deleted), we render a
+      not-found message.
+    - Values rendered are read-only display fields (safe for public audience).
+    - Throttled by the `label-public` scope at the API layer.
+
+    UX
+    --
+    - A compact card layout improves scan-on-mobile readability.
+    - Badges/text emphasize label "kind" (plant/batch/material).
+  -->
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
     .card { max-width: 680px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1.25rem; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }

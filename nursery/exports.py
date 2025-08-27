@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+"""
+Events export endpoint (CSV/JSON) with graceful format negotiation.
+
+Highlights
+----------
+- Auth: `IsAuthenticated`; queryset is owner-scoped (filter by `request.user`).
+- Formats:
+    * `?format=json` -> JSON list (unpaginated), with X-Export-* headers.
+    * `?format=csv` or anything else (default) -> CSV file download.
+    * `Accept: text/csv` also negotiates CSV via renderer.
+- Negotiation quirk:
+    If a client supplies an unknown `?format=xyz`, DRF would 404 by default.
+    `get_renderers()` injects a one-off renderer advertising `format=xyz` so
+    negotiation succeeds, then the view still returns CSV (tests rely on this).
+- Throttle: `events-export` scope.
+"""
+
 from django.conf import settings
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -69,6 +86,14 @@ class EventsExportView(APIView):
         operation_id="events_export",
     )
     def get(self, request):
+        """
+        Return events in the requested format.
+
+        Headers:
+            - X-Export-Total: number of events matching filters.
+            - X-Export-Limit: maximum rows emitted (for JSON and CSV).
+            - X-Export-Truncated: true when total > limit.
+        """
         fmt = (request.query_params.get("format") or "").lower().strip()
         queryset = (
             Event.objects

@@ -1,5 +1,30 @@
 from __future__ import annotations
 
+"""
+Utilities for exporting Event data as JSON or CSV.
+
+CSV
+---
+- Fixed header order in `CSV_HEADERS` to keep downstream parsers stable.
+- Values are normalized:
+    * `happened_at` uses ISO 8601.
+    * `target_type` is "plant" if `plant_id` is set else "batch".
+    * Missing numeric fields render as empty strings (not "null").
+    * `notes` collapses CR/LF into spaces to keep rows one-line.
+
+Limits & headers
+----------------
+- Row cap defaults to `settings.EXPORT_MAX_ROWS` (100k if unset).
+- Response sets:
+    * `Content-Disposition` with a timestamped filename.
+    * `X-Export-Total`, `X-Export-Limit`, `X-Export-Truncated` for observability.
+
+Notes
+-----
+- Queryset must already be owner-scoped and ordered by the caller.
+- JSON export delegates to `EventSerializer` to keep shape aligned with the API.
+"""
+
 import csv
 from io import StringIO
 from typing import Iterable, List, Dict, Optional
@@ -27,6 +52,13 @@ CSV_HEADERS = [
 def serialize_events_to_json(queryset, request) -> List[Dict]:
     """
     Return a plain list of event dicts (unpaginated) suitable for export.
+
+    Args:
+        queryset: Owner-scoped queryset of `Event` rows.
+        request: DRF request (used for serializer context/auth).
+
+    Returns:
+        List[dict]: Serialized events as they appear in the API.
     """
     return EventSerializer(queryset, many=True, context={"request": request}).data  # type: ignore[no-any-return]
 
@@ -35,6 +67,17 @@ def render_events_to_csv(queryset, *, limit: Optional[int] = None) -> HttpRespon
     """
     Render the given queryset (already owner-scoped and filtered) as a CSV download.
     Adds X-Export-* headers for observability. Does not alter CSV shape.
+
+    Args:
+        queryset: Owner-scoped queryset of `Event` rows.
+        limit: Optional row cap (defaults to `EXPORT_MAX_ROWS`).
+
+    Returns:
+        HttpResponse: CSV attachment with headers and observability metadata.
+
+    PERF:
+        # PERF: We use `iterator()` to keep memory bounded for large exports and
+        # respect `limit` inside the generator.
     """
     if limit is None:
         limit = int(getattr(settings, "EXPORT_MAX_ROWS", 100_000))

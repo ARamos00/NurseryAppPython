@@ -1,5 +1,25 @@
 from __future__ import annotations
 
+"""
+Custom DRF renderer for CSV passthrough.
+
+Purpose
+-------
+- Allow `?format=csv` or `Accept: text/csv` to negotiate cleanly with DRF without
+  forcing every CSV view to build raw `HttpResponse` manually.
+- Views may still return an `HttpResponse` they construct themselves; this renderer
+  only affects cases where a `Response(...)` with a string/bytes payload is used.
+
+Notes
+-----
+- We emit UTF-8 bytes and do not set a charset on the media type (common for CSV).
+- For non-str/bytes payloads, we JSON-dump as a best-effort rather than crash.
+
+Security:
+    No special considerations; renderer performs no serialization of model
+    instances on its own and trusts the view's payload.
+"""
+
 from typing import Any, Optional
 
 from rest_framework.renderers import BaseRenderer
@@ -27,6 +47,8 @@ class PassthroughCSVRenderer(BaseRenderer):
         accepted_media_type: Optional[str] = None,
         renderer_context: Optional[dict] = None,
     ) -> bytes:
+        # NOTE: DRF passes the Response.data here; we assume the view already
+        # constructed a valid CSV string or bytes. We avoid adding BOM.
         if data is None:
             return b""
         if isinstance(data, (bytes, bytearray)):

@@ -1,3 +1,27 @@
+"""
+Batch harvest/cull/complete operation tests with optimistic concurrency.
+
+What these tests verify
+-----------------------
+- **Harvest** (`/api/batches/<id>/harvest/`):
+  * Decrements batch availability and creates a `Plant` with harvested quantity.
+  * Emits a `POT_UP` event with a negative quantity delta (from the batch).
+- **Cull** (`/api/batches/<id>/cull/`):
+  * Decrements remaining availability and records an event.
+- **Complete** (`/api/batches/<id>/complete/`):
+  * Fails with 400 when remaining > 0 unless `force=true`.
+  * Succeeds and sets status to `COMPLETED` when forced.
+- **ETag / If-Match precondition**:
+  * Sending a stale ETag on modifying actions yields HTTP 412 (Precondition Failed).
+
+Notes
+-----
+- Each modifying request supplies `If-Match` using a weak ETag based on the
+  `updated_at` timestamp; the server rejects stale writes to prevent lost updates.
+- Idempotency headers are used in the happy path to mirror production guidance
+  (safe retries), but response replay semantics are not asserted here.
+"""
+
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
@@ -19,11 +43,21 @@ from nursery.models import (
 
 
 def etag_for(obj) -> str:
+    """Build a weak ETag from `updated_at` (mirrors server-side format in tests)."""
     return f'W/"{int(obj.updated_at.timestamp())}"'
 
 
 class HarvestOpsTests(TestCase):
+    """End-to-end assertions for batch harvest → cull → complete flows."""
+
     def setUp(self):
+        """
+        Create a user and a minimal Taxon → Material(SEED) → Batch chain.
+
+        WHY:
+            Harvest/cull/complete operate on batches; seeding just enough data
+            keeps these tests focused on the operations themselves.
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="u1", password="pw")
         self.client = APIClient()
@@ -41,6 +75,7 @@ class HarvestOpsTests(TestCase):
         )
 
     def test_harvest_then_cull_then_complete(self):
+        """Happy path across harvest → cull → complete (with force when needed)."""
         # Initial availability
         self.assertEqual(self.batch.available_quantity(), 10)
 
@@ -50,8 +85,8 @@ class HarvestOpsTests(TestCase):
             f"/api/batches/{self.batch.id}/harvest/",
             {"quantity": 4, "notes": "potted 4"},
             format="json",
-            HTTP_IF_MATCH=etag,
-            HTTP_IDEMPOTENCY_KEY="harv-1",
+            HTTP_IF_MATCH=etag,               # SECURITY: optimistic concurrency
+            HTTP_IDEMPOTENCY_KEY="harv-1",    # safe retry semantics
         )
         self.assertEqual(r1.status_code, 201, r1.content)
         self.batch.refresh_from_db()
@@ -62,7 +97,7 @@ class HarvestOpsTests(TestCase):
         self.assertEqual(plant.quantity, 4)
         self.assertEqual(plant.batch_id, self.batch.id)
 
-        # Verify events
+        # Verify events: batch event for potting up with negative delta
         be = Event.objects.filter(batch=self.batch, event_type=EventType.POT_UP).first()
         self.assertIsNotNone(be)
         self.assertEqual(be.quantity_delta, -4)
@@ -91,7 +126,7 @@ class HarvestOpsTests(TestCase):
         )
         self.assertEqual(r3.status_code, 400)
 
-        # COMPLETE with force
+        # COMPLETE with force succeeds and sets status to COMPLETED
         etag4 = etag_for(self.batch)
         r4 = self.client.post(
             f"/api/batches/{self.batch.id}/complete/",
@@ -105,6 +140,7 @@ class HarvestOpsTests(TestCase):
         self.assertEqual(self.batch.status, BatchStatus.COMPLETED)
 
     def test_if_match_precondition(self):
+        """A stale `If-Match` ETag is rejected with HTTP 412 (Precondition Failed)."""
         # Send stale ETag -> expect 412
         stale = 'W/"1"'
         r = self.client.post(

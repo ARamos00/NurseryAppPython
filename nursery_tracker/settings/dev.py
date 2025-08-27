@@ -1,3 +1,18 @@
+"""
+Developer settings (extends base).
+
+Defaults
+--------
+- DEBUG defaults True (overridable via env).
+- Console email backend (no outbound mail).
+- SQLite by default unless `DATABASE_URL` is provided (see comment for Postgres).
+
+Security
+--------
+- Do not use these settings in production; cookies and HTTPS flags are not forced
+  here. Use `prod.py` for hardened defaults.
+"""
+
 from .base import *
 
 DEBUG = env.bool("DEBUG", True)

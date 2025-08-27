@@ -1,3 +1,23 @@
+"""
+drf-spectacular helpers for OpenAPI schema generation.
+
+Purpose
+-------
+Centralize small, reusable OpenAPI components and extensions used across the API:
+- Common headers (optimistic concurrency `If-Match`, idempotency key).
+- Reusable error response shapes (generic error & validation error).
+- Custom field extension for `LabelTargetField` to document the `{type,id}` union.
+
+Notes
+-----
+- This module is **imported at startup** by `nursery.apps.NurseryConfig.ready()`.
+  It must remain side-effect free beyond constant definitions and the extension
+  class registration so schema generation stays deterministic.
+- The `If-Match` header is described as *required* for update/delete operations
+  **when** concurrency enforcement is enabled; individual views control whether
+  it is enforced at runtime (see `settings.ENFORCE_IF_MATCH` and mixins).
+"""
+
 from __future__ import annotations
 
 from drf_spectacular.extensions import OpenApiSerializerFieldExtension
@@ -16,6 +36,8 @@ from rest_framework import serializers
 # ------------------------------------------------------------------------------
 
 # Optimistic concurrency header
+# SECURITY: Clients should echo the server-provided ETag via `If-Match` on
+# PUT/PATCH/DELETE to avoid lost updates in concurrent edits.
 IF_MATCH_HEADER = OpenApiParameter(
     name="If-Match",
     type=OpenApiTypes.STR,
@@ -28,6 +50,7 @@ IF_MATCH_HEADER = OpenApiParameter(
 )
 
 # Idempotency header (safe retries of POST)
+# NOTE: The server keys cache entries by (user, method, path, body-hash).
 IDEMPOTENCY_KEY_HEADER = OpenApiParameter(
     name="Idempotency-Key",
     type=OpenApiTypes.STR,
@@ -39,7 +62,8 @@ IDEMPOTENCY_KEY_HEADER = OpenApiParameter(
     ),
 )
 
-# Owner QR endpoint uses a query token to prove possession of the raw token
+# Owner QR endpoint uses a query token to prove possession of the raw token.
+# This parameter is only used by the **owner** QR endpoint, not the public one.
 LABEL_OWNER_QR_TOKEN_PARAM = OpenApiParameter(
     name="token",
     type=OpenApiTypes.STR,
@@ -49,6 +73,8 @@ LABEL_OWNER_QR_TOKEN_PARAM = OpenApiParameter(
 )
 
 # Common error payloads
+# WHY: Using `inline_serializer` avoids creating runtime serializer classes while
+# still giving accurate schema/typing for shared error envelopes.
 ERROR_RESPONSE = OpenApiResponse(
     response=inline_serializer(
         name="Error",
@@ -95,17 +121,22 @@ IF_MATCH_EXAMPLE = OpenApiExample(
 # ------------------------------------------------------------------------------
 class LabelTargetFieldExtension(OpenApiSerializerFieldExtension):
     """
-    OpenAPI mapping for nursery.serializers.LabelTargetField:
+    OpenAPI mapping for nursery.serializers.LabelTargetField.
 
-      {
-        "type": "plant" | "batch" | "material",
-        "id":   <integer>
-      }
+    Schema shape:
+        {
+          "type": "plant" | "batch" | "material",
+          "id":   <integer>
+        }
+
+    The field accepts exactly these keys; the mapping below declares required
+    keys and a closed set of allowed properties.
     """
     target_class = "nursery.serializers.LabelTargetField"
 
     def map_serializer_field(self, auto_schema, direction):
-        # Return a plain OpenAPI schema fragment (no side effects)
+        # Return a plain OpenAPI schema fragment (no side effects).
+        # NOTE: `direction` is unused; this mapping is identical for read/write.
         return {
             "type": "object",
             "properties": {

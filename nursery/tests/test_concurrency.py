@@ -1,3 +1,21 @@
+"""
+Optimistic concurrency tests for ETag / If-Match preconditions.
+
+What these tests verify
+-----------------------
+- A GET on a resource includes an `ETag` header.
+- A subsequent PATCH with `If-Match: <etag>` succeeds and rotates the ETag.
+- Using a **stale** `If-Match` returns HTTP 412 with a structured error payload
+  including `"code": "stale_resource"` and an `expected_etag`.
+
+Notes
+-----
+- Runtime enforcement is controlled by settings (e.g., `ENFORCE_IF_MATCH=True`);
+  these tests assume enforcement is enabled in the test environment.
+- We deliberately mutate the underlying model (`Plant.objects.update(...)`) to
+  make the previously fetched ETag stale before issuing a client PATCH.
+"""
+
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
@@ -8,7 +26,12 @@ from nursery.models import Taxon, Plant, PropagationBatch, PlantMaterial, Materi
 
 
 class ConcurrencyETagTests(TestCase):
+    """End-to-end optimistic concurrency semantics for plant resources."""
+
     def setUp(self):
+        """
+        Create a user and a minimal Taxon → Material(SEED) → Batch → Plant chain.
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="u1", password="pw")
         self.client = APIClient()
@@ -24,6 +47,9 @@ class ConcurrencyETagTests(TestCase):
         self.plant = Plant.objects.create(user=self.user, taxon=self.taxon, batch=self.batch, quantity=1)
 
     def test_retrieve_sets_etag_and_allows_update_with_match(self):
+        """
+        GET returns an ETag; PATCH with matching `If-Match` succeeds and rotates ETag.
+        """
         # Retrieve to get ETag
         r = self.client.get(f"/api/plants/{self.plant.id}/")
         self.assertEqual(r.status_code, 200, r.content)
@@ -46,6 +72,7 @@ class ConcurrencyETagTests(TestCase):
         self.assertNotEqual(etag, r3["ETag"])
 
     def test_stale_if_match_returns_412(self):
+        """PATCH with a stale `If-Match` returns 412 and structured error info."""
         # Get a valid ETag
         r = self.client.get(f"/api/plants/{self.plant.id}/")
         etag = r["ETag"]

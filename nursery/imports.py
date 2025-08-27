@@ -1,5 +1,35 @@
 from __future__ import annotations
 
+"""
+CSV import helpers for Nursery domain models.
+
+Scope
+-----
+- Streaming-friendly readers and normalizers for taxa, materials, and plants.
+- Size/row caps enforced via settings:
+    * MAX_IMPORT_BYTES (default 5,000,000) — soft guard using upload.size when present.
+    * IMPORT_MAX_ROWS (default 50,000) — data rows cap (excludes header).
+- Validation is delegated to DRF serializers to reuse field/choice/date rules.
+
+Tenancy & security
+------------------
+- FK lookups are owner-scoped with `.for_user(user)` to prevent cross-tenant writes.
+- This module only parses and validates; HTTP-layer constraints (e.g., CSRF,
+  throttling, content type) are handled by API views.
+
+Transactions & dry runs
+-----------------------
+- Each import runs in a transaction. When `dry_run=True`, we call
+  `transaction.set_rollback(True)` after iterating so all DB writes are discarded
+  while still exercising the code paths.
+
+Error reporting contract
+------------------------
+- Returns `ImportResult` with counts and a list of error dicts per row; error
+  dicts use keys: row, field (or "header"), code, and error (human-readable or
+  serializer error structure). This shape is consumed by API tests/clients.
+"""
+
 import csv
 from dataclasses import dataclass
 from io import TextIOWrapper
@@ -27,6 +57,14 @@ from .serializers import (
 
 @dataclass
 class ImportResult:
+    """Result envelope returned by import runners.
+
+    Attributes:
+        rows_ok: Number of successfully processed data rows.
+        rows_failed: Number of data rows that failed validation or lookups.
+        errors: Per-row error objects (row number, field/header, code, details).
+        created_ids: IDs of newly created objects (empty for dry runs).
+    """
     rows_ok: int
     rows_failed: int
     errors: List[Dict[str, Any]]
@@ -41,6 +79,9 @@ def _ensure_size(upload: UploadedFile) -> None:
     """
     Guard uploads by size (bytes). Unknown/zero sizes are allowed but the caller
     must consume the file as a stream, which DictReader does.
+
+    Raises:
+        ValueError: when the stated file size exceeds MAX_IMPORT_BYTES.
     """
     max_bytes = int(getattr(settings, "MAX_IMPORT_BYTES", 5_000_000))
     size = upload.size if upload.size is not None else 0
@@ -52,7 +93,19 @@ def _ensure_size(upload: UploadedFile) -> None:
 def _open_csv(upload: UploadedFile) -> Iterable[Dict[str, str]]:
     """
     Wrap the uploaded file in a text wrapper for csv.DictReader (streaming).
-    Caller must *not* reuse the file after this call.
+
+    Args:
+        upload: The uploaded file (binary mode); may have unknown size.
+
+    Yields:
+        Dict[str, str]: A dict per CSV data row, keyed by header names.
+
+    Raises:
+        ValueError: when header row is missing.
+
+    NOTE:
+        We use UTF-8 with BOM handling ("utf-8-sig") and `newline=""` as
+        recommended by the csv module to avoid newline translation issues.
     """
     _ensure_size(upload)
     # decode as UTF-8 with BOM handling
@@ -66,7 +119,11 @@ def _open_csv(upload: UploadedFile) -> Iterable[Dict[str, str]]:
 
 def _row_cap_exceeded(idx: int) -> bool:
     """
-    True if data row index (starting at 2 = first data row) exceeds IMPORT_MAX_ROWS.
+    Return True if the data row index exceeds IMPORT_MAX_ROWS.
+
+    Args:
+        idx: 1-based file line index from enumerate; header is idx=1, first data
+             row is idx=2, so "count" of data rows is (idx - 1).
     """
     max_rows = int(getattr(settings, "IMPORT_MAX_ROWS", 50_000))  # data rows
     if max_rows <= 0:
@@ -80,6 +137,7 @@ def _row_cap_exceeded(idx: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def _normalize_str(v: Any) -> str:
+    """Return a trimmed string; None becomes empty string."""
     if v is None:
         return ""
     if isinstance(v, str):
@@ -91,6 +149,14 @@ def _normalize_choice(choice_cls, value: Any) -> str:
     """
     Accept either the canonical value (exact) or case-insensitive label.
     Returns canonical value or raises ValueError.
+
+    Args:
+        choice_cls: Enum-like class with `.choices` iterable of (value, label).
+        value: Raw incoming CSV value (any type); treated case-insensitively
+               against labels and strictly against canonical values.
+
+    Raises:
+        ValueError: when the value does not match a canonical value or label.
     """
     s = _normalize_str(value)
     if not s:
@@ -117,8 +183,11 @@ def _require_fields(
     required: Iterable[str],
 ) -> List[str]:
     """
-    Return list of missing required column names for this row.
-    Works even when DictReader was constructed with incomplete headers.
+    Return a list of missing required column names for this row.
+
+    Why:
+        `csv.DictReader` will omit keys entirely when the header is incomplete;
+        this helper distinguishes between missing columns and empty values.
     """
     keys = set(row.keys())
     missing = [col for col in required if col not in keys]
@@ -126,6 +195,16 @@ def _require_fields(
 
 
 def _parse_int(value: Any, *, min_value: Optional[int] = None) -> Optional[int]:
+    """
+    Parse an integer from a CSV field.
+
+    Args:
+        value: Raw value to parse; empty string/None returns None.
+        min_value: Optional minimum (inclusive).
+
+    Raises:
+        ValueError: when parsing fails or min_value is violated.
+    """
     s = _normalize_str(value)
     if s == "":
         return None
@@ -143,6 +222,21 @@ def _parse_int(value: Any, *, min_value: Optional[int] = None) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 def import_taxa(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> ImportResult:
+    """
+    Create `Taxon` rows from CSV data.
+
+    Args:
+        user: Owner; assigned to created objects for tenancy.
+        rows: Iterable of row dicts (from `_open_csv` or equivalent).
+        dry_run: When True, validates and counts but rolls back all writes.
+
+    Returns:
+        ImportResult: counts, per-row errors, and created IDs (empty on dry run).
+
+    Notes:
+        - Required columns: scientific_name
+        - Optional: cultivar, clone_code
+    """
     ok, failed = 0, 0
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []
@@ -177,11 +271,29 @@ def import_taxa(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> 
             created_ids.append(obj.id)
             ok += 1
         if dry_run:
+            # NOTE: Keep the transaction intact so code paths are exercised,
+            # then roll back at the end to avoid writes.
             transaction.set_rollback(True)
     return ImportResult(ok, failed, errors, created_ids)
 
 
 def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> ImportResult:
+    """
+    Create `PlantMaterial` rows from CSV data.
+
+    Args:
+        user: Owner; assigned to created objects for tenancy.
+        rows: Iterable of row dicts (from `_open_csv` or equivalent).
+        dry_run: When True, validates and counts but rolls back all writes.
+
+    Returns:
+        ImportResult.
+
+    Notes:
+        - Required columns: taxon_id, material_type, lot_code
+        - Choices: `material_type` can be canonical value or label (case-insensitive).
+        - FK: `taxon_id` must belong to the `user` (owner-scoped lookup).
+    """
     ok, failed = 0, 0
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []
@@ -242,6 +354,24 @@ def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False
 
 
 def import_plants(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> ImportResult:
+    """
+    Create `Plant` rows from CSV data.
+
+    Args:
+        user: Owner; assigned to created objects for tenancy.
+        rows: Iterable of row dicts (from `_open_csv` or equivalent).
+        dry_run: When True, validates and counts but rolls back all writes.
+
+    Returns:
+        ImportResult.
+
+    Notes:
+        - Required columns: taxon_id
+        - Optional: batch_id, status, quantity, acquired_on (date), notes
+        - Choices: `status` accepts canonical value or label (case-insensitive);
+          defaults to ACTIVE when missing.
+        - FKs: `taxon_id` (required) and optional `batch_id` must belong to user.
+    """
     ok, failed = 0, 0
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []

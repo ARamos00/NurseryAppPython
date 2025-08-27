@@ -1,3 +1,27 @@
+"""
+DRF serializers for Nursery domain objects (taxa, materials, batches, plants, events),
+labels (including public tokens), audit logs, and label analytics.
+
+Goals
+-----
+- Provide thin, explicit serializers over `nursery.models` without altering behavior.
+- Enforce critical invariants early (e.g., Event targets exactly one of `batch` XOR
+  `plant`) and validate tenant ownership where user-supplied FKs are accepted.
+
+Security & tenancy
+------------------
+- Creation/mutation serializers never accept a `user` value from the client; views
+  must set `instance.user = request.user` (or rely on `perform_create` in ViewSets).
+- `LabelTargetField` verifies ownership of the target object so labels cannot be
+  attached across tenants.
+- Read-only fields include display helpers to avoid leaking sensitive internals.
+
+Concurrency/Idempotency
+-----------------------
+- ETag/If-Match and idempotency are enforced at the view/util layer, not here.
+- These serializers are compatible with those helpers (no side-effecting code).
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -22,6 +46,8 @@ from .models import (
 # Core model serializers
 # ----------------------------
 class TaxonSerializer(serializers.ModelSerializer):
+    """CRUD representation of `Taxon` (botanical identity fields only)."""
+
     class Meta:
         model = Taxon
         fields = [
@@ -33,10 +59,12 @@ class TaxonSerializer(serializers.ModelSerializer):
             "updated_at",
             "user",
         ]
+        # NOTE: `user` is read-only; views set it to `request.user` on create/update.
         read_only_fields = ["id", "created_at", "updated_at", "user"]
 
 
 class PlantMaterialSerializer(serializers.ModelSerializer):
+    """Material lots per taxon; exposes a string display for convenience in UIs."""
     taxon_display = serializers.StringRelatedField(source="taxon", read_only=True)
 
     class Meta:
@@ -56,6 +84,7 @@ class PlantMaterialSerializer(serializers.ModelSerializer):
 
 
 class PropagationBatchSerializer(serializers.ModelSerializer):
+    """Batches of starts (seeds/cuttings/etc.) with a friendly material display."""
     material_display = serializers.StringRelatedField(source="material", read_only=True)
 
     class Meta:
@@ -77,6 +106,7 @@ class PropagationBatchSerializer(serializers.ModelSerializer):
 
 
 class PlantSerializer(serializers.ModelSerializer):
+    """Individual plants or grouped counts; includes taxon/batch string displays."""
     taxon_display = serializers.StringRelatedField(source="taxon", read_only=True)
     batch_display = serializers.StringRelatedField(source="batch", read_only=True)
 
@@ -107,6 +137,12 @@ class PlantSerializer(serializers.ModelSerializer):
 
 
 class EventSerializer(serializers.ModelSerializer):
+    """
+    Events target exactly one of (`batch`, `plant`).
+
+    - Serializer-level validation mirrors `Event.clean()` to present clear API errors.
+    - Also verifies that the selected target is owned by the current user.
+    """
     batch_display = serializers.StringRelatedField(source="batch", read_only=True)
     plant_display = serializers.StringRelatedField(source="plant", read_only=True)
 
@@ -137,18 +173,30 @@ class EventSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Enforce XOR(batch, plant) and ownership alignment at the serializer level
-        for clear API errors (model.clean also enforces).
+        Enforce XOR(batch, plant) and per-tenant ownership alignment.
+
+        Args:
+            attrs: Incoming attributes for create/update.
+
+        Raises:
+            serializers.ValidationError: If both/neither targets are provided or
+            if the chosen target doesn't belong to the authenticated user.
+
+        Notes:
+            - Model-level `clean()` and a DB CheckConstraint also enforce the XOR
+              invariant; validating here yields friendlier API messages.
         """
         request = self.context.get("request")
         user = getattr(request, "user", None)
 
+        # Use pending attrs if present, otherwise fall back to instance values.
         batch = attrs.get("batch") if "batch" in attrs else getattr(self.instance, "batch", None)
         plant = attrs.get("plant") if "plant" in attrs else getattr(self.instance, "plant", None)
 
         if bool(batch) == bool(plant):
             raise serializers.ValidationError("Exactly one of 'batch' or 'plant' must be provided.")
 
+        # SECURITY: Ensure the event cannot reference objects from another tenant.
         if user and getattr(user, "is_authenticated", False):
             if batch and batch.user_id != user.id:
                 raise serializers.ValidationError("Selected batch does not belong to the current user.")
@@ -163,8 +211,14 @@ class EventSerializer(serializers.ModelSerializer):
 # ----------------------------
 class LabelTargetField(serializers.Field):
     """
-    Shape: {"type": "plant"|"batch"|"material", "id": <int>}
-    Serializes to the same shape. Validates ownership.
+    Polymorphic target selector for labels.
+
+    Shape (input & output):
+        {"type": "plant" | "batch" | "material", "id": <int>}
+
+    Behavior:
+        - Serializes a model instance to the same compact shape.
+        - Validates that the target exists and is owned by the current user.
     """
     default_error_messages = {
         "invalid": "Expected an object with 'type' and 'id'.",
@@ -180,6 +234,7 @@ class LabelTargetField(serializers.Field):
     }
 
     def to_representation(self, value):
+        """Return {"type": <key>, "id": <pk>} for the given model instance."""
         model = type(value)
         for k, v in self._type_map.items():
             if v is model:
@@ -187,6 +242,7 @@ class LabelTargetField(serializers.Field):
         return {"type": "unknown", "id": None}
 
     def to_internal_value(self, data):
+        """Validate shape, resolve instance, and enforce tenant ownership."""
         if not isinstance(data, dict) or "type" not in data or "id" not in data:
             self.fail("invalid")
         target_type = data["type"]
@@ -199,6 +255,7 @@ class LabelTargetField(serializers.Field):
         except Model.DoesNotExist:
             self.fail("not_found")
 
+        # SECURITY: Labels can only attach to objects owned by the requester.
         request = self.context.get("request")
         user = getattr(request, "user", None)
         if not user or not getattr(user, "is_authenticated", False) or obj.user_id != user.id:
@@ -207,6 +264,13 @@ class LabelTargetField(serializers.Field):
 
 
 class LabelSerializer(serializers.ModelSerializer):
+    """
+    Minimal label surface for index/detail: exposes target and whether a token is active.
+
+    Notes:
+        - `target` is polymorphic via `LabelTargetField`.
+        - `active` reflects presence of `active_token_id` (no token contents exposed).
+    """
     # Do not set source="target"; DRF infers it by default. This avoids assertion errors.
     target = LabelTargetField()
     active = serializers.SerializerMethodField()
@@ -217,12 +281,16 @@ class LabelSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at", "user", "active"]
 
     def get_active(self, obj: Label) -> bool:
+        """Return True when the label currently has a non-revoked active token."""
         return bool(obj.active_token_id)
 
 
 class LabelCreateSerializer(serializers.ModelSerializer):
     """
-    Used for create and rotate responses — returns raw token once.
+    Response shape for label creation/rotation.
+
+    - Returns `token` (raw secret) and `public_url` **once** so the owner can save it.
+    - Subsequent reads should use `LabelSerializer` and never reveal the token again.
     """
     target = LabelTargetField()
     token = serializers.CharField(read_only=True)
@@ -238,16 +306,25 @@ class LabelCreateSerializer(serializers.ModelSerializer):
 # Audit log
 # ----------------------------
 class AuditActorSerializer(serializers.Serializer):
+    """Compact representation of an actor (usually equals the owner)."""
     id = serializers.IntegerField()
     username = serializers.CharField()
 
 
 class AuditTargetSerializer(serializers.Serializer):
+    """Polymorphic reference to the mutated object (app_label.model + id)."""
     model = serializers.CharField()
     id = serializers.IntegerField()
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
+    """
+    Read-only audit entries with actor/target expansions.
+
+    Notes:
+        - `changes` payload is model- and action-dependent (see model docstring).
+        - Intended for dashboards and CSV/JSON exports; no writes via API.
+    """
     when = serializers.DateTimeField(source="created_at", read_only=True)
     actor = serializers.SerializerMethodField()
     target = serializers.SerializerMethodField()
@@ -268,11 +345,13 @@ class AuditLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_actor(self, obj: AuditLog) -> Dict[str, Any] | None:
+        """Inline the actor as {id, username} or null when missing."""
         if not obj.actor_id:
             return None
         return {"id": obj.actor_id, "username": getattr(obj.actor, "username", "")}
 
     def get_target(self, obj: AuditLog) -> Dict[str, Any]:
+        """Inline the content type + object id as {model, id}."""
         ct: ContentType = obj.content_type
         model_label = f"{ct.app_label}.{ct.model}"
         return {"model": model_label, "id": obj.object_id}
@@ -283,7 +362,12 @@ class AuditLogSerializer(serializers.ModelSerializer):
 # ----------------------------
 class LabelStatsSerializer(serializers.Serializer):
     """
-    Legacy/compact counts used when no ?days param is provided.
+    Compact counts used when no `?days` param is provided.
+
+    Fields:
+        - label_id: DB id of the label
+        - total_visits: all-time
+        - last_7d / last_30d: recent windows for quick cards
     """
     label_id = serializers.IntegerField()
     total_visits = serializers.IntegerField()
@@ -293,19 +377,35 @@ class LabelStatsSerializer(serializers.Serializer):
 
 class LabelStatsQuerySerializer(serializers.Serializer):
     """
-    Optional query serializer for stats.
+    Optional stats query params.
+
+    Args:
+        days (int, 1..365): When present, the API returns a windowed series payload.
     """
     days = serializers.IntegerField(min_value=1, max_value=365, required=False)
 
 
 class LabelVisitSeriesPointSerializer(serializers.Serializer):
+    """Single (date, visits) point in a windowed time series."""
     date = serializers.DateField()
     visits = serializers.IntegerField()
 
 
 class LabelStatsWithSeriesSerializer(serializers.Serializer):
     """
-    Full payload when ?days is present: legacy counts + window metadata + series.
+    Full payload when `?days` is present: legacy counts + window metadata + series.
+
+    Shape:
+        {
+          "label_id": int,
+          "total_visits": int,
+          "last_7d": int,
+          "last_30d": int,
+          "window_days": int,
+          "start_date": "YYYY-MM-DD",
+          "end_date": "YYYY-MM-DD",
+          "series": [{"date": "...", "visits": int}, ...]
+        }
     """
     # legacy counts
     label_id = serializers.IntegerField()

@@ -1,3 +1,21 @@
+"""
+Project URL configuration.
+
+Surfaces
+--------
+- `/admin/` — Django admin (back-office only).
+- `/api/` — primary API surface, router-driven ViewSets (+ standalone endpoints).
+- `/api/v1/` — **mirror** of `/api/` without code duplication; endpoints share
+  implementations but are mounted under a versioned path for clients.
+- `/api/schema`, `/api/docs`, `/api/redoc` — OpenAPI schema & UIs.
+- `/p/<token>/` & `/p/<token>/qr.svg` — public label page and QR (AllowAny).
+
+Notes
+-----
+- Routers are registered once, then included under both `/api/` and `/api/v1/`.
+- Public pages are throttled via `label-public` scope in their views.
+"""
+
 from __future__ import annotations
 
 from django.contrib import admin

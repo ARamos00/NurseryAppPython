@@ -1,3 +1,27 @@
+"""
+Inventory and production reports (JSON/CSV) for Nursery Tracker.
+
+Overview
+--------
+- Auth: all endpoints require `IsAuthenticated` (enforced via BaseReportView).
+- Tenancy: querysets are owner-scoped with `.for_user(request.user)` to prevent
+  cross-tenant leakage. Object details are not exposed here—only aggregates.
+- Throttling: `reports-read` scope (see DRF settings) to protect heavy reads.
+- Formats:
+    * Default JSON (`?format=json` or no query param).
+    * CSV when `?format=csv` (or DRF's format override) via `PassthroughCSVRenderer`.
+- Totals:
+    * Inventory JSON returns `totals` and duplicates them under `meta.totals` for
+      forward compatibility. CSV returns only rows (no footer).
+    * Production JSON returns `summary_by_type` and optional `timeseries`, plus
+      `meta.totals` for overall counts/quantity.
+
+Notes
+-----
+- Helper parsers accept naïve datetimes and make them timezone-aware.
+- CSV payloads sanitize CR/LF to keep each record on a single line.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -22,6 +46,19 @@ from nursery.renderers import PassthroughCSVRenderer
 
 
 def _csv_payload(headers: List[str], rows: Iterable[Dict[str, Any]]) -> str:
+    """Render rows into a CSV string with a fixed header order.
+
+    Args:
+        headers: Column names to emit in order.
+        rows: Iterable of mapping rows (extra keys are ignored).
+
+    Returns:
+        UTF-8 text containing a header row followed by sanitized data rows.
+
+    NOTE:
+        We collapse CR/LF to spaces to keep each CSV record to a single line,
+        which simplifies downstream tooling and tests.
+    """
     buf = StringIO()
     writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
     writer.writeheader()
@@ -33,16 +70,19 @@ def _csv_payload(headers: List[str], rows: Iterable[Dict[str, Any]]) -> str:
 
 
 def _fmt_param(request: Request) -> str:
+    """Return a normalized format string from the query params (default 'json')."""
     return (request.query_params.get("format") or "json").lower().strip()
 
 
 def _parse_date_param(s: str | None):
+    """Parse ISO date ('YYYY-MM-DD') or return None when missing/invalid."""
     if not s:
         return None
     return parse_date(s)
 
 
 def _parse_dt_param(s: str | None):
+    """Parse ISO datetime and make it aware if naïve; return None when missing/invalid."""
     if not s:
         return None
     dt = parse_datetime(s)
@@ -52,6 +92,17 @@ def _parse_dt_param(s: str | None):
 
 
 class BaseReportView(APIView):
+    """
+    Common config for report endpoints.
+
+    - Requires authentication.
+    - Applies `reports-read` throttle scope.
+    - Enables CSV via `PassthroughCSVRenderer` (DRF format override compatible).
+
+    Owner scoping helpers:
+        `_plants()` and `_events()` return querysets filtered to the current user,
+        with minimal select_related to reasonably optimize common access patterns.
+    """
     permission_classes = [permissions.IsAuthenticated]
     throttle_scope = "reports-read"
     # Enable csv via DRF's format override (?format=csv)
@@ -59,9 +110,11 @@ class BaseReportView(APIView):
 
     # owner-scoped helpers
     def _plants(self, request: Request) -> QuerySet[Plant]:
+        """Return plants owned by the current user with taxon preloaded."""
         return Plant.objects.for_user(request.user).select_related("taxon")
 
     def _events(self, request: Request) -> QuerySet[Event]:
+        """Return events owned by the current user (no preloading by default)."""
         return Event.objects.for_user(request.user)
 
 
@@ -83,6 +136,21 @@ class BaseReportView(APIView):
 )
 class InventoryReportView(BaseReportView):
     def get(self, request: Request) -> Response:
+        """
+        Return inventory grouped by taxon and status, plus overall totals.
+
+        Query params:
+            - taxon (int): filter by taxon id
+            - status (str): filter by plant status value
+            - acquired_from / acquired_to (date): inclusive bounds
+
+        Formats:
+            - JSON (default): returns rows + totals (+ meta.totals)
+            - CSV: returns rows only as an attachment; no totals footer
+
+        Raises:
+            400 on invalid `taxon` id.
+        """
         fmt = _fmt_param(request)
         qs = self._plants(request)
 
@@ -179,6 +247,24 @@ class InventoryReportView(BaseReportView):
 )
 class ProductionReportView(BaseReportView):
     def get(self, request: Request) -> Response:
+        """
+        Summarize production by event type, optionally with a dense time series.
+
+        Query params:
+            - date_from / date_to (datetime): inclusive window; naïve values made aware
+            - event_type (str): filter to a single event type
+            - target (str): "plant" or "batch" to filter target kind
+            - taxon (int): filter events by plant.taxon_id or batch.material.taxon_id
+            - group_by (str): "day", "week", or "month" to include a timeseries
+
+        Formats:
+            - JSON (default): summary_by_type + optional timeseries + meta.totals
+            - CSV: if grouped, returns (bucket,event_type,events,quantity); else
+              returns (event_type,events,quantity)
+
+        Raises:
+            400 on invalid `taxon` id.
+        """
         fmt = _fmt_param(request)
         qs = self._events(request)
 

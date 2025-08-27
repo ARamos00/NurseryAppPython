@@ -1,5 +1,26 @@
 from __future__ import annotations
 
+"""
+Owner-scoped Label API (CRUD + token rotation + analytics + owner QR SVG).
+
+Key points
+----------
+- **Privacy-by-design**: Raw tokens are never persisted; only `token_hash` (SHA-256)
+  and a short `prefix` are stored. Raw token is returned **once** on create/rotate.
+- **Tenancy**: `IsAuthenticated + IsOwner` enforced; queries scoped to `request.user`.
+- **Public surface**: Public pages live under `/p/<token>/` (in `public_views.py`);
+  owner QR endpoint returns a clickable SVG that encodes that URL.
+- **Idempotency**: Create/rotate actions are decorated with `@idempotent` so clients
+  can safely retry with the same `Idempotency-Key`.
+- **Throttling**: Public endpoints use the `label-public` throttle scope (defined
+  elsewhere); owner endpoints rely on global/user throttles.
+
+Notes
+-----
+- The QR SVG is wrapped in an `<a>` link for desktop testing convenience. Caches for
+  the **owner** QR are disabled (`no-store`); public QR uses strong ETags + immutable.
+"""
+
 import hashlib
 import io
 import secrets
@@ -64,6 +85,9 @@ def _qr_svg_bytes(text: str, *, link_url: str | None = None) -> bytes:
     """
     Generate an SVG QR image for `text` (absolute URL).
     If link_url is provided, wrap all <svg> children in <a xlink:href="...">.
+
+    NOTE:
+        Wrapping the QR in an anchor makes the SVG clickable for easier desktop testing.
     """
     qr = qrcode.QRCode(
         version=None,
@@ -144,6 +168,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         return LabelSerializer
 
     def _issue_token(self, label: Label) -> tuple[LabelToken, str]:
+        """Create a new token row and return `(token_row, raw_token)` pair."""
         raw = _new_token()
         token = LabelToken.objects.create(
             label=label,
@@ -153,6 +178,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         return token, raw
 
     def _revoke_active(self, label: Label) -> None:
+        """Mark the currently-active token as revoked (if any)."""
         if label.active_token_id:
             LabelToken.objects.filter(
                 pk=label.active_token_id,
@@ -160,6 +186,7 @@ class LabelViewSet(viewsets.ModelViewSet):
             ).update(revoked_at=timezone.now())
 
     def _public_url(self, request: Request, raw_token: str) -> str:
+        """Absolute URL to the public label page for `raw_token`."""
         url = reverse("label-public", kwargs={"token": raw_token})
         return request.build_absolute_uri(url)
 
@@ -185,11 +212,15 @@ class LabelViewSet(viewsets.ModelViewSet):
             object_id=target_obj.pk,
         ).first()
         if existing and request.query_params.get("force") != "true":
+            # WHY: Returning 409 clarifies that the label already exists; caller can opt-in
+            # to rotate via `?force=true` to receive a new raw token.
             return Response(
                 {"non_field_errors": ["Label already exists for this target. Use ?force=true to rotate."]},
                 status=status.HTTP_409_CONFLICT,
             )
 
+        # SECURITY: All operations occur within a transaction and lock the row on rotate
+        # to avoid racing token rotations for the same label.
         with transaction.atomic():
             label = existing or Label.objects.create(
                 user=request.user,
@@ -272,7 +303,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         if not raw:
             return Response({"detail": "token is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate proof-of-possession: must match the current active token
+        # SECURITY: Proof-of-possession — caller must present the *current* raw token.
         if not label.active_token_id or _hash_token(raw) != label.active_token.token_hash:
             return Response({"detail": "Invalid token for this label."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -280,7 +311,7 @@ class LabelViewSet(viewsets.ModelViewSet):
         svg = _qr_svg_bytes(url, link_url=url)
 
         resp = HttpResponse(svg, content_type="image/svg+xml; charset=utf-8")
-        # Owner QR should never be cached
+        # Owner QR should never be cached (e.g., could leak in shared caches)
         resp["Cache-Control"] = "no-store"
         resp["Content-Disposition"] = 'inline; filename="label-qr.svg"'
         return resp

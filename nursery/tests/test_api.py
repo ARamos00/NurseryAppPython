@@ -1,3 +1,26 @@
+"""
+Authentication, tenancy isolation, CSRF, and serializer validation tests.
+
+What these tests verify
+-----------------------
+- **Auth required**: SessionAuthentication + IsAuthenticated returns 403 for
+  unauthenticated API access.
+- **Ownership on create**: Server ignores a client-supplied `user` field and
+  assigns ownership from `request.user`.
+- **Per-user isolation**: Objects created by one user are invisible to others.
+- **CSRF enforcement**: With `enforce_csrf_checks=True`, unsafe methods require a
+  valid CSRF cookie + header pair (403 without; 201 with).
+- **Event serializer validation**:
+  * XOR invariant: exactly one of `batch` XOR `plant` must be set.
+  * Ownership: target object must belong to the authenticated user.
+
+Notes
+-----
+- Tests use the real APIClient to exercise auth/session middleware and DRF view
+  plumbing; assertions focus on *security boundaries* and *invariants* rather
+  than model shapes.
+"""
+
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
@@ -16,17 +39,25 @@ from nursery.models import (
 
 
 class ApiAuthAndOwnershipTests(APITestCase):
+    """Authentication, tenant isolation, CSRF, and XOR validation behaviors."""
+
     def setUp(self):
+        """Create two users and a plain APIClient (no CSRF enforcement by default)."""
         self.user_a = User.objects.create_user(username="alice", password="pass12345")
         self.user_b = User.objects.create_user(username="bob", password="pass12345")
         self.client = APIClient()
 
     def test_auth_required_list_taxa_unauthenticated_403(self):
+        """Unauthenticated list access is forbidden (403)."""
         # SessionAuthentication + IsAuthenticated -> 403 when unauthenticated
         resp = self.client.get("/api/taxa/")
         self.assertEqual(resp.status_code, 403)
 
     def test_create_taxon_sets_owner(self):
+        """
+        Creating a taxon sets `user` to the authenticated user, regardless of any
+        client-supplied value in the payload (server-side ownership).
+        """
         self.client.login(username="alice", password="pass12345")
         payload = {
             "scientific_name": "Acer palmatum",
@@ -45,6 +76,7 @@ class ApiAuthAndOwnershipTests(APITestCase):
         self.assertEqual(t.user_id, self.user_a.id)
 
     def test_per_user_isolation(self):
+        """Data created by Alice is not visible to Bob (404 on retrieve, empty list)."""
         # Alice creates a taxon
         self.client.login(username="alice", password="pass12345")
         resp = self.client.post(
@@ -67,8 +99,10 @@ class ApiAuthAndOwnershipTests(APITestCase):
 
     def test_csrf_required_when_enforced(self):
         """
-        With enforce_csrf_checks=True, SessionAuthentication requires CSRF for unsafe methods.
+        With `enforce_csrf_checks=True`, SessionAuthentication requires CSRF for
+        unsafe methods (POST/PUT/PATCH/DELETE).
         """
+        # WHY: enable Django's CSRF checks in the client to simulate real browser behavior.
         client = APIClient(enforce_csrf_checks=True)
         self.assertTrue(client.login(username="alice", password="pass12345"))
 
@@ -95,6 +129,14 @@ class ApiAuthAndOwnershipTests(APITestCase):
         self.assertEqual(resp_ok.status_code, 201, resp_ok.data)
 
     def test_event_serializer_validation_xor_and_ownership(self):
+        """
+        Event serializer enforces XOR target (batch XOR plant) and ownership.
+
+        Cases:
+            - both batch and plant -> 400
+            - cross-owner target -> 400
+            - valid event with batch only -> 201
+        """
         # Alice logs in and owns the created resources
         self.client.login(username="alice", password="pass12345")
 

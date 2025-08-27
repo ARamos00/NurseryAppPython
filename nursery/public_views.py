@@ -1,5 +1,30 @@
 from __future__ import annotations
 
+"""
+Public-facing views for labels: QR image and human-friendly detail page.
+
+Surfaces
+--------
+- `PublicLabelQRView`:
+    * No auth, no cookies required.
+    * Produces a **clickable** SVG QR that encodes `/p/<token>/`.
+    * Strong ETag derived from the text; supports `If-None-Match` -> 304.
+    * Cache policy: `public, max-age=31536000, immutable`.
+    * Throttled via `label-public`.
+- `PublicLabelView`:
+    * No auth; renders `templates/public/label_detail.html` via DRF Template renderer.
+    * Accepts either a **raw token** (hash match) or its **12-char prefix**.
+    * Records a `LabelVisit` owned by the label's owner for per-tenant analytics.
+    * Stops resolving if the target object has been archived (soft-deleted).
+
+Privacy & security
+------------------
+- Raw tokens are not persisted. Only an **active** token or the printed prefix will
+  resolve. Revocation stops both.
+- Visits capture only coarse metadata (IP, UA, referrer) and are scoped to the label
+  owner; there is no linkage to authenticated viewers.
+"""
+
 import hashlib
 import io
 from typing import Optional
@@ -50,6 +75,9 @@ def _qr_svg_bytes(text: str, *, link_url: Optional[str] = None) -> bytes:
     Produce an SVG QR for the given text (absolute URL).
     If link_url is provided, wrap all <svg> children in a clickable <a> element.
     Returns raw SVG bytes (UTF-8).
+
+    NOTE:
+        Wrapping the QR with an anchor improves desktop testing ergonomics.
     """
     qr = qrcode.QRCode(
         version=None,  # fit automatically
@@ -90,6 +118,7 @@ def _qr_svg_bytes(text: str, *, link_url: Optional[str] = None) -> bytes:
     root.append(a_el)
 
     return ET.tostring(root, encoding="utf-8", method="xml")
+
 
 @extend_schema(exclude=True)  # exclude from OpenAPI schema (APIView without serializer)
 class PublicLabelQRView(APIView):

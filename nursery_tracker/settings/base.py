@@ -1,3 +1,36 @@
+"""
+Base Django settings for Nursery Tracker.
+
+Layout
+------
+- Split settings: `base.py` (shared), `dev.py` (developer overrides), `prod.py` (hardened).
+- `environ` is used to source configuration; a local `.env` is optional in dev.
+
+API stack
+---------
+- Django 5.x + DRF + django-filter + drf-spectacular.
+- SessionAuthentication with CSRF (kept enabled).
+- Throttling: global (`anon`, `user`) and named scopes for heavy or public endpoints:
+  wizard-seed, events-export, label-public, audit-read, imports, reports-read, labels-read.
+
+Versioning / Schema
+-------------------
+- `/api/` is the primary surface; `/api/v1/` is a mirror (router mounted under a
+  namespace). drf-spectacular advertises both and resolves duplicate operationIds
+  via `OPERATION_ID_DUPLICATE_MODE="suffix"`.
+
+Observability
+-------------
+- `core.middleware.RequestIDLogMiddleware` logs a single structured line per request
+  (with request id, user id, duration). `RequestSizeLimitMiddleware` rejects large
+  unsafe requests early with a 413 JSON error.
+
+Security
+--------
+- Default cookie `SameSite=Lax`, `X_FRAME_OPTIONS=DENY`. Production hardening lives
+  in `prod.py` (HSTS, SECURE_*). Keep CSRF on; do not disable.
+"""
+
 from pathlib import Path
 import environ
 
@@ -216,6 +249,9 @@ AUTH_USER_MODEL = "accounts.User"
 # Concurrency (optimistic locking) switch
 # ---------------------------------------------------------------------
 # When True, PATCH/PUT/DELETE require `If-Match` and return 428 if missing.
+# NOTE: This setting is declared twice in this file (above and here) to preserve
+# backward-compatibility with older code that referenced it later; both resolve
+# to the same env value. Do not remove without checking callers.
 ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
 
 # ---------------------------------------------------------------------
@@ -228,6 +264,7 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "request_id": {"()": "core.logging.RequestIDFilter"},
+        # WHY: Keep the filter lean; enrichers (user, path, status) are done in middleware.
     },
     "formatters": {
         # Simple structured formatter; extend as needed in prod.py

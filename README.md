@@ -1,41 +1,27 @@
-Reasoning Summary:
+# 🌱 Nursery Tracker — Django/DRF backend
 
-* We’ve completed A–J polishing (v1 mirror, soft-delete/archive, label analytics + clickable QR, reports polish, imports caps, webhooks worker/flags, observability, limits middleware, docs polish).
-* The README is updated to be the single source of truth: architecture, layout, env, runbooks, endpoint reference (with exact shapes), throttle scopes, concurrency/idempotency, and troubleshooting.
-* Scope is documentation-only; no runtime behavior changes. Language is precise and aligned with your code/tests.
-
-Planned Changes:
-
-* PATH: `README.md` — Replace with a comprehensive, production-grade document reflecting the current backend.
-
-Artifacts:
-PATH: README.md
-
-```markdown
-# Nursery Tracker — Backend-First Django/DRF
-
-A production-grade **Django 5.2 + DRF 3.16** backend for tracking nursery operations:
+A production-grade **Django 5.2 + Django REST Framework 3.16** backend for tracking nursery operations:
 **taxa**, **plant materials**, **propagation batches**, **plants**, **events** — with
-**per-user tenancy**, **session auth + CSRF**, **OpenAPI docs**, **throttling**, **idempotency**,
-**optimistic concurrency (ETag/If-Match)**, **bulk ops**, **imports/exports**, **reports**,
+**per-user tenancy**, **SessionAuth + CSRF**, **OpenAPI docs**, **throttling**, **idempotency**,
+**optimistic concurrency (ETag/If-Match)**, **bulk ops**, **CSV imports/exports**, **reports**,
 **QR labels + public pages**, **auditing**, and **outbound webhooks**.
 
-> Backend is the product surface. A UI can be layered later without changing API contracts.
+> The API is the product surface. A separate UI can be layered on later without changing contracts.
 
 ---
 
 ## Table of Contents
 
 - [Highlights](#highlights)
-- [Architecture](#architecture)
+- [Architecture Overview](#architecture-overview)
 - [Project Layout](#project-layout)
 - [Getting Started](#getting-started)
-- [Configuration (.env)](#configuration-env)
+- [Configuration](#configuration)
 - [Runbook](#runbook)
 - [API Docs & URLs](#api-docs--urls)
 - [Security & Tenancy](#security--tenancy)
 - [Domain Model](#domain-model)
-- [Core API](#core-api)
+- [Core API Endpoints](#core-api-endpoints)
 - [Seed Wizard](#seed-wizard)
 - [Labels, QR & Public Pages](#labels-qr--public-pages)
 - [Bulk Operations](#bulk-operations)
@@ -49,7 +35,7 @@ A production-grade **Django 5.2 + DRF 3.16** backend for tracking nursery operat
 - [Health, Throttling, Observability](#health-throttling-observability)
 - [Versioning](#versioning)
 - [Testing](#testing)
-- [Reset & Developer Seed](#reset--developer-seed)
+- [Developer Seed & Reset](#developer-seed--reset)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -57,66 +43,50 @@ A production-grade **Django 5.2 + DRF 3.16** backend for tracking nursery operat
 
 ## Highlights
 
-- **Per-user tenancy**: All data scoped by `user`; object access guarded by `IsOwner`.
-- **Session auth + CSRF**: Production-safe defaults; CSRF enforced on unsafe methods.
-- **OpenAPI 3**: Swagger UI & Redoc via drf-spectacular; clean, stable enums and components.
-- **Seed wizard**: Guided flow for Seed → Material → Batch → SOW event.
-- **Labels & public pages**: Rotatable tokens, QR codes, anonymous public page, visit analytics.
-- **Bulk ops**: Plant status updates; batch harvest/cull/complete.
-- **Exports/Imports**: Events export (CSV/JSON). CSV imports for taxa/materials/plants with dry-run.
-- **Reports**: Inventory snapshot + production summary/timeseries (CSV/JSON) with totals.
-- **Idempotency**: Safe retries with `Idempotency-Key`.
-- **Optimistic concurrency**: ETag on GET; `If-Match` on write; 412 on stale.
-- **Auditing**: Lightweight audit trail of create/update/delete via API path.
-- **Webhooks**: Queue + worker for outbound deliveries; feature-flag friendly.
-- **Observability**: Request ID middleware with structured logs.
-- **Limits**: Request size limiter returns consistent `413` JSON.
+- **Per-user tenancy** — All domain models subclass `core.OwnedModel` and are scoped by `request.user`.
+- **Session auth + CSRF** — Browser-friendly, production-safe defaults. CSRF is required for unsafe methods.
+- **OpenAPI 3** — drf-spectacular with Swagger UI & Redoc. Custom components for concurrency/idempotency headers.
+- **Idempotency** — Safe retries for POST using `Idempotency-Key`; first success is cached and replayed.
+- **Optimistic concurrency** — ETag on GET; `If-Match` required on write (when enabled), 412 on stale.
+- **Labels & public pages** — Rotatable/revocable tokens, owner/public QR SVG endpoints, visit analytics.
+- **Bulk ops** — Plant bulk status updates; batch harvest/cull/complete; archive (soft delete) for plants/batches.
+- **CSV imports/exports** — Events export (CSV/JSON). CSV imports for taxa/materials/plants with dry-run.
+- **Reports** — Inventory snapshot and production summary/timeseries; CSV/JSON; totals included.
+- **Auditing** — Create/update/delete logged with diffs and request metadata.
+- **Webhooks** — Queue + worker command; HTTPS/signature requirements governed by env flags.
+- **Throttling** — Global (`user`, `anon`) and named scopes (seed wizard, exports, public labels, imports, reports…).
+- **Observability** — Request-ID middleware adds `X-Request-ID` and logs one structured line per request.
+- **Limits** — Request/upload size guards return consistent **413** JSON.
 
 ---
 
-## Architecture
+## Architecture Overview
 
-```
-
-accounts/                 # Custom User (AUTH\_USER\_MODEL)
-core/
-models.py               # OwnedModel / OwnedQuerySet
-permissions.py          # IsOwner object-level guard
-throttling.py
-utils/
-idempotency.py        # @idempotent decorator (header-based)
-concurrency.py        # ETag helpers (+ If-Match guard)
-webhooks.py           # enqueue(), signing, delivery scaffolding
-nursery/
-models.py               # Taxon, PlantMaterial, PropagationBatch, Plant, Event
-\# Label, LabelToken, LabelVisit, AuditLog
-serializers.py          # Model serializers + DTOs (Label target, report shapes)
-api/
-viewsets.py           # CRUD ViewSets (owner-scoped) + audit writes
-wizard\_seed.py        # Seed onboarding (stepwise + compose)
-labels.py             # LabelViewSet (create/rotate/revoke/qr/stats)
-batch\_ops.py          # harvest / cull / complete / archive
-plant\_ops.py          # bulk status / archive
-events\_export.py      # events export (CSV/JSON)
-imports.py            # CSV imports (taxa/materials/plants)
-reports.py            # inventory + production endpoints
-audit.py              # read-only audit log viewset (filters)
-public\_views.py         # /p/<token>/ and /p/<token>/qr.svg
-renderers.py            # PassthroughCSVRenderer (negotiates CSV cleanly)
-schema.py               # OpenAPI components + custom field mapping
-signals.py              # Label + webhook emits, terminal-state revocations
-management/commands/
-dev\_seed.py           # idempotent seed
-deliver\_webhooks.py   # worker: retry/backoff, DLQ-ready
-nursery\_tracker/
-settings/base.py dev.py prod.py
-urls.py                 # routers, docs, health, public routes
-templates/public/label\_detail.html
-
+```text
+┌────────────┐     ┌──────────────┐     ┌───────────────┐
+│  Browser   │────▶│  SessionAuth │────▶│  DRF ViewSets │───────────────┐
+│/API client │     │ + CSRF       │     │  + mixins     │               │
+└────────────┘     └──────────────┘     └──────┬────────┘               │
+                                               │                        │
+                   Filters/Search/Ordering/Pagination                   │
+                                               │                        ▼
+                                    ┌──────────┴──────────┐     ┌───────────────┐
+                                    │   Serializers       │◀───▶│   Models      │
+                                    │ (validation)        │     │ (OwnedModel)  │
+                                    └──────────┬──────────┘     └──────┬────────┘
+                                               │                       │
+                          Concurrency (ETag/If-Match) & Idempotency    │
+                                               │                       │
+                                               ▼                       ▼
+                                    ┌──────────┴──────────┐     ┌───────────────┐
+                                    │  Signals/Auditing   │     │  Webhook Queue│
+                                    │  Labels, revocations│     │  Worker cmd   │
+                                    └─────────────────────┘     └───────────────┘
 ````
 
-**Tenancy**: domain models subclass `core.OwnedModel` (`user`, `created_at`, `updated_at`).
-ViewSets scope querysets by `request.user`; `IsOwner` enforces object access.
+* **Tenancy** enforced by `OwnedModel` + `IsOwner`.
+* **Concurrency** via ETag/If-Match helpers; **Idempotency** decorator caches first success.
+* **Public surface** for labels at `/p/<token>/` (no auth) with analytics.
 
 ---
 
@@ -124,69 +94,90 @@ ViewSets scope querysets by `request.user`; `IsOwner` enforces object access.
 
 ```text
 NurseryApp/
-├─ accounts/                  ┆
-├─ core/                      ┆  security, tenancy, utilities
-├─ nursery/                   ┆  domain + API
-│  └─ tests/                  ┆  comprehensive test suite
-└─ nursery_tracker/           ┆  settings & urls
-````
+├─ accounts/                        # Custom User model
+├─ core/
+│  ├─ models.py                     # OwnedModel / OwnedQuerySet
+│  ├─ permissions.py                # IsOwner object guard
+│  ├─ throttling.py                 # Global + named scopes
+│  ├─ utils/
+│  │  ├─ idempotency.py             # @idempotent decorator
+│  │  ├─ concurrency.py             # ETag helpers + If-Match guard
+│  │  └─ webhooks.py                # enqueue/signing helpers
+│  ├─ middleware.py                 # Request-ID logging
+│  └─ views.py                      # /health/
+├─ nursery/
+│  ├─ models.py                     # Taxon, Material, Batch, Plant, Event, Label*, Audit*, Webhook*
+│  ├─ serializers.py                # Model serializers + custom fields/DTOs
+│  ├─ api/
+│  │  ├─ viewsets.py                # Owner-scoped CRUD
+│  │  ├─ labels.py                  # create/rotate/revoke/qr/stats
+│  │  ├─ batch_ops.py               # harvest/cull/complete/archive
+│  │  ├─ plant_ops.py               # bulk status + archive
+│  │  ├─ events_export.py           # events export (CSV/JSON)
+│  │  ├─ imports.py                 # CSV endpoints
+│  │  ├─ reports.py                 # inventory & production
+│  │  ├─ audit.py                   # audit read-only
+│  │  ├─ wizard_seed.py             # stepwise seed wizard
+│  │  └─ v1_aliases.py              # /api/v1/ router mirror
+│  ├─ public_views.py               # /p/<token>/ & /p/<token>/qr.svg
+│  ├─ renderers.py                  # CSV renderer
+│  ├─ schema.py                     # drf-spectacular extensions
+│  ├─ signals.py                    # label lifecycle + webhook emits
+│  ├─ audit_hooks.py                # soft-delete -> audit delete
+│  └─ management/commands/
+│     ├─ dev_seed.py                # developer data (idempotent)
+│     ├─ deliver_webhooks.py        # webhook worker
+│     └─ cleanup_idempotency.py     # vacuums stale entries
+├─ nursery_tracker/
+│  ├─ settings/{base,dev,prod}.py   # 12-factor split
+│  └─ urls.py                       # routers, docs, public, health
+└─ templates/public/label_detail.html
+```
 
 ---
 
 ## Getting Started
 
-### Prereqs
+**Prereqs**
 
 * Python **3.12+**
-* SQLite (default dev) or PostgreSQL 14+ (recommended for prod)
+* SQLite (dev default) or PostgreSQL 14+ (recommended for prod)
 
-### Setup
+**Setup**
 
 ```bash
 python -m venv .venv
-source ./.venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -U pip
 pip install -r requirements.txt
-cp .env.example .env  # or create manually (see below)
+cp .env.example .env                 # Or create .env using the table below
 ```
 
 ---
 
-## Configuration (.env)
+## Configuration
 
-```ini
-DEBUG=True
-SECRET_KEY=dev-insecure-change-me
-DATABASE_URL=sqlite:///db.sqlite3
+The app is 12-factor friendly. Key environment variables:
 
-ALLOWED_HOSTS=127.0.0.1,localhost
-CSRF_TRUSTED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000
+| Variable                      | Purpose                           | Typical Dev             |
+| ----------------------------- | --------------------------------- | ----------------------- |
+| `DEBUG`                       | Enable debug mode                 | `True`                  |
+| `SECRET_KEY`                  | Django secret                     | `dev-change-me`         |
+| `DATABASE_URL`                | DB connection string              | `sqlite:///db.sqlite3`  |
+| `ALLOWED_HOSTS`               | Host allowlist                    | `127.0.0.1,localhost`   |
+| `CSRF_TRUSTED_ORIGINS`        | Scheme+host for CSRF              | `http://127.0.0.1:8000` |
+| `ENFORCE_IF_MATCH`            | Require `If-Match` on write       | `False` (dev)           |
+| `MAX_REQUEST_BYTES`           | Request body cap                  | optional                |
+| `MAX_IMPORT_BYTES`            | CSV upload cap (bytes)            | `5000000`               |
+| `IMPORT_MAX_ROWS`             | Max data rows per import          | `50000`                 |
+| `EXPORT_MAX_ROWS`             | Max rows returned by export       | optional                |
+| `WEBHOOKS_*`                  | HTTPS/signature/UA/backoff/limits | see settings            |
+| `REST_FRAMEWORK["PAGE_SIZE"]` | Default list page size            | `25`                    |
 
-# Throttle tuning
-DRF_THROTTLE_RATE_USER=200/min
-DRF_THROTTLE_RATE_ANON=50/min
-DRF_THROTTLE_RATE_WIZARD_SEED=30/min
-DRF_THROTTLE_RATE_EVENTS_EXPORT=10/min
-DRF_THROTTLE_RATE_LABEL_PUBLIC=120/min
-DRF_THROTTLE_RATE_AUDIT_READ=60/min
-DRF_THROTTLE_RATE_IMPORTS=6/min
-DRF_THROTTLE_RATE_REPORTS_READ=60/min
-DRF_THROTTLE_RATE_LABELS_READ=60/min
+**Throttling rates** (set via env; see `core/throttling.py` for names):
 
-# Concurrency toggle (require If-Match)
-ENFORCE_IF_MATCH=False
-
-# Upload/Import caps (bytes)
-MAX_IMPORT_BYTES=5000000
-
-# Webhooks
-WEBHOOKS_REQUIRE_HTTPS=False        # True in prod
-WEBHOOKS_SIGNATURE_HEADER=X-Webhook-Signature
-WEBHOOKS_USER_AGENT=NurseryTracker/0.1
-WEBHOOKS_ENABLE_AUTO_EMIT=False
-```
-
-See `nursery_tracker/settings/prod.py` for HSTS/SSL production hardening.
+* Global: `user`, `anon`
+* Scoped: `wizard-seed`, `events-export`, `label-public`, `imports`, `reports-read`, `audit-read`, `labels-read`
 
 ---
 
@@ -196,7 +187,7 @@ See `nursery_tracker/settings/prod.py` for HSTS/SSL production hardening.
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
-# (optional) start webhook worker in another terminal
+# (optional) in another terminal: run the webhook worker
 python manage.py deliver_webhooks
 ```
 
@@ -205,8 +196,8 @@ python manage.py deliver_webhooks
 ## API Docs & URLs
 
 * **API root**: `http://127.0.0.1:8000/api/`
-* **v1 mirror**: `http://127.0.0.1:8000/api/v1/` (surface frozen; same handlers)
-* **OpenAPI**: `http://127.0.0.1:8000/api/schema/`
+* **v1 mirror**: `http://127.0.0.1:8000/api/v1/` (same handlers, frozen surface)
+* **OpenAPI schema**: `http://127.0.0.1:8000/api/schema/`
 * **Swagger UI**: `http://127.0.0.1:8000/api/docs/`
 * **Redoc**: `http://127.0.0.1:8000/api/redoc/`
 * **Admin**: `http://127.0.0.1:8000/admin/`
@@ -217,202 +208,269 @@ python manage.py deliver_webhooks
 
 ## Security & Tenancy
 
-* **Auth**: `SessionAuthentication` (login via admin/browsable API).
-* **CSRF**: required for POST/PUT/PATCH/DELETE. Obtain cookie with a GET first; send `X-CSRFToken`.
-* **Tenancy**: models subclass `OwnedModel`; queries filter by `request.user`; `IsOwner` enforces object access.
-* **Public pages**: token-based; only minimal fields exposed; label tokens are revocable and rotatable.
+* **Authentication**: `SessionAuthentication` with Django sessions.
+* **CSRF**: Required for POST/PUT/PATCH/DELETE. Obtain cookie via GET, then send `X-CSRFToken`.
+* **Tenancy**: All domain models derive from `OwnedModel` (`user`, `created_at`, `updated_at`). Querysets are scoped by `request.user`. Object access is enforced by `core.permissions.IsOwner`.
+* **Public endpoints**: Only the label public page (`/p/<token>/` and its SVG) is anonymous; responses contain minimal fields.
 
 ---
 
 ## Domain Model
 
-* **Taxon** — `scientific_name`, `cultivar?`, `clone_code?`. Unique **per user** across the triple.
-* **PlantMaterial** — FK→Taxon; `material_type` (Seed/Cutting/…); `lot_code?`.
+* **Taxon** — identity is the triple *(scientific\_name, cultivar?, clone\_code?)*, unique **per user**.
+* **PlantMaterial** — FK→Taxon; `material_type` (Seed/Cutting/…); optional `lot_code`; provenance notes.
 * **PropagationBatch** — FK→PlantMaterial; `method`, `status`, `quantity_started`, `started_on`.
-* **Plant** — FK→Taxon; optional FK→PropagationBatch; `status`, `quantity`, `acquired_on`.
-* **Event** — Actions targeting **XOR**: a batch **or** a plant; `event_type`, `happened_at`, `quantity_delta?`, `notes?`.
-* **Label** — Generic to Plant/Batch/Material; may have an `active_token`.
-* **LabelToken** — `token_hash` (SHA-256), `prefix`, `revoked_at?` (raw never stored).
-* **LabelVisit** — public page analytics.
-* **AuditLog** — actor, changes, request metadata.
+* **Plant** — FK→Taxon; optional FK→PropagationBatch; `status`, `quantity`, `acquired_on`; **soft-deletable**.
+* **Event** — Targets **exactly one** of `batch` XOR `plant`; `event_type`, `happened_at`, `quantity_delta?`, `notes?`.
+* **Label** — Generic to Plant/Batch/Material; may have a single `active_token`.
+* **LabelToken** — Stored **as hash + prefix only**; `revoked_at` marks rotation/revocation; raw token is shown once.
+* **LabelVisit** — Captures public page hits (for owner analytics).
+* **AuditLog** — Immutable audit trail (model, action, changes, request metadata).
+* **WebhookEndpoint / WebhookDelivery** — Outbound webhooks configuration & queued deliveries.
+
+**Relationships (simplified)**
+
+```text
+Taxon 1─* PlantMaterial 1─* PropagationBatch 1─* Plant
+Event → (exactly one of) {PropagationBatch | Plant}
+Label → GenericForeignKey to {Plant, PropagationBatch, PlantMaterial}
+```
 
 ---
 
-## Core API
+## Core API Endpoints
 
-CRUD ViewSets (owner scoped), each with filtering/search/ordering/pagination:
+Owner-scoped CRUD with filtering/search/ordering/pagination:
 
-* `/api/taxa/`
-* `/api/materials/`
-* `/api/batches/`
-* `/api/plants/`
-* `/api/events/`
+* `GET/POST /api/taxa/`
+* `GET/POST /api/materials/`
+* `GET/POST /api/batches/`
+* `GET/POST /api/plants/`
+* `GET/POST /api/events/`
 
-**Delete**: Hard DELETE is disabled for Plants/Batches — use `POST /api/plants/{id}/archive/` and `POST /api/batches/{id}/archive/`.
+**Soft delete / archive**:
+
+* `POST /api/plants/{id}/archive/`
+* `POST /api/batches/{id}/archive/`
+
+> Hard DELETE is not supported for Plants/Batches to preserve history and labels.
 
 ---
 
 ## Seed Wizard
 
-`/api/wizard/seed/*` (throttled: `wizard-seed`):
+Throttled under scope **`wizard-seed`**. Stepwise flow:
 
 * `POST /api/wizard/seed/select-taxon/`
 * `POST /api/wizard/seed/create-material/`
 * `POST /api/wizard/seed/create-batch/`
 * `POST /api/wizard/seed/log-sow/`
-* `POST /api/wizard/seed/compose/` (one-shot create; idempotent)
+* `POST /api/wizard/seed/compose/` — one-shot compose of all steps (idempotent)
 
 ---
 
 ## Labels, QR & Public Pages
 
-* `POST /api/labels/`
-  Body: `{ "target": { "type": "plant"|"batch"|"material", "id": <int> } }`
-  Returns **once**: `{ token, public_url, ... }` (token is not stored).
+* **Create**
+  `POST /api/labels/`
+  Body:
 
-* `POST /api/labels/{id}/rotate/` → revoke old token; return new raw token.
+  ```json
+  { "target": { "type": "plant|batch|material", "id": 123 } }
+  ```
 
-* `POST /api/labels/{id}/revoke/` → revoke active token (safe to repeat).
+  Returns **once**: `{ "token": "<RAW>", "public_url": "/p/<RAW>/" , ... }`
 
-* **Owner QR**: `GET /api/labels/{id}/qr/?token=<RAW>` → SVG (clickable <a>, `no-store`).
+* **Rotate** — revoke current, return new raw token
+  `POST /api/labels/{id}/rotate/`
 
-* **Public page**: `GET /p/<RAW>/` → HTML summary; records a `LabelVisit`.
+* **Revoke** — revoke active token (safe to repeat)
+  `POST /api/labels/{id}/revoke/`
 
-* **Public QR**: `GET /p/<RAW>/qr.svg` → SVG for the public page.
+* **Owner QR** (requires proof-of-possession)
+  `GET /api/labels/{id}/qr/?token=<RAW>` → SVG, `Cache-Control: no-store`
 
-* **Stats**: `GET /api/labels/{id}/stats/?days=N`
+* **Public page**
+  `GET /p/<RAW>/` → HTML summary; records a `LabelVisit`
 
-  * No `days`: `{ total_visits, last_7d, last_30d }`
-  * With `days` (1–365): adds `{ window_days, start_date, end_date, series: [{ date, visits }, ...] }`
+* **Public QR**
+  `GET /p/<RAW>/qr.svg` → SVG URL encoder, **immutable cache** (no secrets inside)
 
-**Terminal status** (`SOLD|DEAD|DISCARDED`) on a Plant automatically revokes the active label.
+* **Stats**
+  `GET /api/labels/{id}/stats/?days=N`
+
+  * Without `days`: `{ total_visits, last_7d, last_30d }`
+  * With `days` (1–365): adds `{ window_days, start_date, end_date, series:[{date, visits}] }`
+
+**Token privacy**: Raw tokens are never persisted; only a SHA-256 hash and a short prefix are stored. Plants moved to a terminal status (e.g., **SOLD/DEAD/DISCARDED**) automatically revoke/detach the active token.
 
 ---
 
 ## Bulk Operations
 
-* **Plants**: `POST /api/plants/bulk/status/`
-  Body: `{ "ids": [1,2], "status": "SOLD", "notes": "Market sale" }`
-  Emits appropriate `Event` rows; response includes updated/missing/event IDs.
+* **Plants — bulk status**
+  `POST /api/plants/bulk/status/`
+  Body:
 
-* **Batches**:
+  ```json
+  { "ids": [1,2,3], "status": "SOLD", "notes": "Market sale" }
+  ```
 
-  * `POST /api/batches/{id}/harvest/` → create plant/outtake; negative `quantity_delta` on batch, positive on plant.
-  * `POST /api/batches/{id}/cull/` → negative `quantity_delta` (loss/waste).
-  * `POST /api/batches/{id}/complete/` → requires zero remaining unless `force=true`.
-  * `POST /api/batches/{id}/archive/` → soft-delete; revokes labels.
+  Emits per-plant `Event` rows; response includes updated/missing/event IDs.
 
-All ops are idempotent and respect `If-Match` (when enforced).
+* **Batches — inventory lifecycle**
+
+  * `POST /api/batches/{id}/harvest/` → creates a Plant (+quantity) and records a batch `POT_UP` event (−quantity)
+  * `POST /api/batches/{id}/cull/` → records negative `quantity_delta`
+  * `POST /api/batches/{id}/complete/` → requires zero remaining unless `force=true`
+  * `POST /api/batches/{id}/archive/` → soft delete; revokes labels
+
+All above honor idempotency; writes can be protected with `If-Match` (see below).
 
 ---
 
 ## Exports
 
-**Events**: `GET /api/events/export/?format=csv|json`
-CSV headers:
+**Events** export (throttled: `events-export`):
 
-```
-id,happened_at,event_type,target_type,batch_id,plant_id,quantity_delta,notes
-```
+* `GET /api/events/export/?format=csv|json`
+* **CSV headers**:
 
-JSON returns a non-paginated list.
+  ```
+  id,happened_at,event_type,target_type,batch_id,plant_id,quantity_delta,notes
+  ```
+* **JSON** returns a non-paginated list.
+* When row-capped, responses include:
+
+  * `X-Export-Total`, `X-Export-Limit`, `X-Export-Truncated: true`
+
+Content negotiation supports `Accept: text/csv` as an alternative to `?format=csv`.
 
 ---
 
 ## Imports
 
-CSV multipart endpoints (throttled: `imports`), with `?dry_run=1` support for plants:
+CSV multipart endpoints (throttled: `imports`) with row/size caps and optional dry-run:
 
 * `POST /api/imports/taxa/`
-  `scientific_name,cultivar,clone_code`
-* `POST /api/imports/materials/`
-  `taxon_scientific_name,material_type,lot_code,notes`
-* `POST /api/imports/plants/?dry_run=1`
-  `scientific_name,batch_id,quantity,acquired_on,notes,status`
+  Columns: `scientific_name,cultivar,clone_code`
 
-**Size limits**: uploads exceeding `MAX_IMPORT_BYTES` (default 5 MB) return **413** with JSON.
+* `POST /api/imports/materials/`
+  Columns: `taxon_id,material_type,lot_code,notes`
+
+* `POST /api/imports/plants/?dry_run=1`
+  Columns: `taxon_id,batch_id?,status?,quantity?,acquired_on?,notes?`
+  (choices accept canonical values or case-insensitive labels)
+
+**Limits**:
+
+* Upload > `MAX_IMPORT_BYTES` → **413** with JSON error
+* Data rows > `IMPORT_MAX_ROWS` → remaining rows are ignored (processed count reflects the cap)
 
 ---
 
 ## Reports
 
-`/api/reports/*` (owner-scoped; throttled: `reports-read`)
+Owner-scoped; throttled: `reports-read`.
 
-* **Inventory**: `GET /api/reports/inventory/?format=json|csv`
+* **Inventory** — `/api/reports/inventory/?format=json|csv`
+  JSON includes `rows` and `totals`. CSV includes a totals footer.
 
-  * JSON includes `meta.totals`; CSV appends totals as a footer comment.
-* **Production**: `GET /api/reports/production/?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv`
-
-  * Summary + time series; same totals conventions.
+* **Production** — `/api/reports/production/?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv&group_by=day?`
+  Returns `summary_by_type` and optional `timeseries` when grouped by day.
 
 ---
 
 ## Idempotency
 
-Endpoints marked idempotent accept:
+Send a stable key for any POST that should be safe to retry:
 
 ```
-Idempotency-Key: <client-generated-stable-key>
+Idempotency-Key: <client-generated-uuid-or-hash>
 ```
 
-The first successful response for `(user, method, path, body-hash)` is replayed on retries.
+The first successful response for `(user, method, path, body-hash)` is cached and **replayed** on duplicates.
+(Used by: seed compose, labels create/rotate, bulk ops, imports… as applicable.)
+
+**cURL example**
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/api/labels/ \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 1f2b2f2a-..." \
+  -d '{"target":{"type":"plant","id":123}}'
+```
 
 ---
 
 ## Optimistic Concurrency
 
-* **GET detail** returns `ETag`.
-* **PUT/PATCH/DELETE** require `If-Match` when `ENFORCE_IF_MATCH=True`.
-  Stale tags return **412 Precondition Failed**.
+* **GET detail** returns an `ETag`.
+* **PUT/PATCH/DELETE** require `If-Match: <etag>` when `ENFORCE_IF_MATCH=True`.
+* Stale tags yield **412 Precondition Failed** and include the expected ETag.
+
+**cURL example**
+
+```bash
+# 1) Read current ETag
+etag=$(curl -si http://127.0.0.1:8000/api/plants/42/ | awk '/^ETag:/{print $2}')
+
+# 2) Update with If-Match
+curl -i -X PATCH http://127.0.0.1:8000/api/plants/42/ \
+  -H "Content-Type: application/json" \
+  -H "If-Match: $etag" \
+  -d '{"notes":"updated"}'
+```
 
 ---
 
 ## Audit Logs
 
-Read-only, owner-scoped (staff may filter by `user_id`).
-`GET /api/audit-logs/?model=plant&action=update&date_from=...&date_to=...`
+Read-only, owner-scoped listing with filters:
 
-Items include:
+* `GET /api/audit/`
+* Query params: `model`, `action`, and date ranges
 
-* `model` (e.g., `"plant"`)
-* `action` (`create|update|delete`)
-* `changes` (diff), `actor`, `request_id`, `ip`, `user_agent`, timestamps.
+Each item includes `model`, `action` (`create|update|delete`), `changes` (two-element `[old,new]`), and request metadata (`request_id`, `actor`, IP, user agent).
+Soft-deletes (archive) are recorded as `delete`.
 
 ---
 
 ## Webhooks (Outbound)
 
-* Emitted by signals when enabled; enqueued with metadata/signature.
-* Delivered by worker:
+* **Endpoints**: per-user configuration (URL, secret, event types, is\_active)
+* **Enqueue**: emitted by signals when enabled
+* **Deliver**: worker command with retry/backoff
 
 ```bash
 python manage.py deliver_webhooks
 ```
 
-Environment toggles in `.env` (require HTTPS, signature header, enable auto-emit).
-Failures back off and can move to DLQ (scaffolding included).
+**Config flags** (see settings):
+
+* Require HTTPS; custom signature header; user-agent
+* Backoff schedule & max attempts
+* Toggle auto-emit in dev/test
 
 ---
 
 ## Health, Throttling, Observability
 
-* **Health**: `/health/` returns DB status (200 or 503).
-* **Throttles**:
+* **Health** — `/health/` returns DB status (200 or 503)
 
-  * Global: `user`, `anon`
-  * Scoped: `wizard-seed`, `events-export`, `label-public`, `audit-read`, `imports`, `reports-read`, `labels-read`
-* **Observability**:
+* **Throttling** — global (`user`, `anon`) and named scopes:
+  `wizard-seed`, `events-export`, `label-public`, `imports`, `reports-read`, `audit-read`, `labels-read`
 
-  * Request ID middleware logs one JSON-ish line per request with
-    `request_id`, `user_id`, `method`, `path`, `status`, `duration_ms`.
+* **Observability** — Request-ID middleware:
 
-Example log:
+  * Adds `X-Request-ID` to every response (respects safe client-provided values)
+  * Logs **one** structured line to the `nursery.request` logger, e.g.:
 
-```
-level=INFO logger=nursery.request request_id=... method=GET path=/api/taxa/ status=200 user_id=1 duration_ms=23
-```
+    ```
+    level=INFO logger=nursery.request request_id=... method=GET path=/api/taxa/ status=200 user_id=1 duration_ms=23
+    ```
 
-* **Request size limits**: oversize bodies return **413** with:
+* **Request size limits** — oversize bodies → **413** with:
 
   ```json
   {"detail": "Request body too large.", "code": "request_too_large"}
@@ -422,27 +480,29 @@ level=INFO logger=nursery.request request_id=... method=GET path=/api/taxa/ stat
 
 ## Versioning
 
-* **/api/** is the primary surface.
-* **/api/v1/** is a frozen mirror of the current routes (mounted without code duplication).
-* OpenAPI advertises both servers; duplicate `operationId`s are suffixed automatically.
+* Primary surface: **`/api/`**
+* Mirror: **`/api/v1/`** mounted without code duplication (frozen surface)
+* OpenAPI advertises both; duplicate operation IDs are safely suffixed
 
 ---
 
 ## Testing
 
+Run the full suite:
+
 ```bash
 python manage.py test -v 2
 ```
 
-Coverage includes models (constraints), API auth/ownership, filters/ordering,
-bulk ops, exports/imports, reports (CSV/JSON), labels + analytics, concurrency,
-throttling, docs, limits, and webhooks scaffolding.
+Coverage includes models (constraints/invariants), auth/ownership, filters & ordering,
+bulk ops, import/export (CSV/JSON), reports, labels & analytics, concurrency, throttling,
+observability, limits, audit logs, and webhook delivery worker behavior.
 
 ---
 
-## Reset & Developer Seed
+## Developer Seed & Reset
 
-Fresh run:
+Start fresh:
 
 ```bash
 rm -f db.sqlite3
@@ -450,18 +510,19 @@ python manage.py migrate
 python manage.py dev_seed --reset --size=MEDIUM
 ```
 
-Users (dev seed): `alice`, `bob` (password: `pass12345`).
+The developer seed is **idempotent** and creates a small, linked dataset for exploration.
+Check command output for any sample users it creates.
 
 ---
 
 ## Troubleshooting
 
-* **403 CSRF**: Perform a GET to set cookies; send `X-CSRFToken` header on write.
-* **412 on update**: Refresh resource to get latest `ETag`; resend with `If-Match`.
-* **404 on `/p/<token>/`**: Token revoked or unknown; rotate or create a new label.
-* **429 throttling**: Back off or tune env throttles.
-* **Docs warnings**: We set `ENUM_NAME_OVERRIDES` and unique component names for custom action responses. If you add enums or new custom actions, keep names unique in `schema.py`.
-* **413 upload**: Increase `MAX_IMPORT_BYTES`, or split files.
+* **403 CSRF** — Perform a GET to set cookies; send `X-CSRFToken` on write.
+* **412 Precondition Failed** — Refresh to get the latest `ETag`, then retry with `If-Match`.
+* **404 `/p/<token>/`** — Token was rotated/revoked or unknown; create/rotate a label to get a fresh token.
+* **429 throttling** — Back off or tune throttle env rates.
+* **413 upload** — Increase `MAX_IMPORT_BYTES`, or split files.
+* **OpenAPI quirks** — Custom field/headers are documented via `nursery/schema.py`. When adding new enums or actions, ensure names remain unique.
 
 ---
 
@@ -470,17 +531,4 @@ Users (dev seed): `alice`, `bob` (password: `pass12345`).
 MIT (see `LICENSE` if present).
 
 ```
-
-Post-Checks:
-- No runtime changes; only `README.md`.  
-- Verify the README matches behavior by opening `/api/docs` and spot-checking a few flows:
-  - Create a taxon; list taxa.
-  - Create a label; fetch owner QR (`/api/labels/{id}/qr/?token=...`).
-  - Public page loads for the token (`/p/<token>/`).
-  - Events export CSV.
-  - Imports reject oversize file with 413 JSON.
-
-Risks & Follow-ups:
-- README can drift as features evolve; keep it updated in the same PRs that change routes/contracts.
-- When you add DB indexes (performance polish), append a short “Indexes” note under Domain Model with the chosen indices and rationale.
 ```

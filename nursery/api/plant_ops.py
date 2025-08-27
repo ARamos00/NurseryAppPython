@@ -1,5 +1,25 @@
 from __future__ import annotations
 
+"""
+Custom operations for `Plant` resources.
+
+Actions:
+- `POST /api/plants/bulk/status/`: Bulk status update across owned plants; writes
+  per-plant `Event` records (SELL/DISCARD for terminal states; NOTE otherwise).
+- `POST /api/plants/{id}/archive/`: Soft-delete a plant and revoke its active label.
+
+Cross-cutting concerns
+----------------------
+- **Idempotency**: `@idempotent` ensures repeated identical requests return the first
+  success (user/key/method/path/body-hash).
+- **Optimistic concurrency**: Archive requires `If-Match` when header present.
+
+Security
+--------
+- All lookups and updates are owner-scoped; bulk update resolves only user-owned ids
+  and reports non-owned/missing ids in `missing_ids`.
+"""
+
 from typing import List, Dict
 
 from django.contrib.contenttypes.models import ContentType
@@ -36,6 +56,7 @@ from nursery.schema import (
 # -----------------------------------------------------------------------------
 
 class BulkStatusRequestSerializer(serializers.Serializer):
+    """Request body for bulk status changes."""
     ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
@@ -45,17 +66,20 @@ class BulkStatusRequestSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
 
     def validate_ids(self, value: List[int]) -> List[int]:
+        """Deduplicate and sort IDs to avoid double work and keep stable output."""
         # Deduplicate to avoid double work
         return sorted(set(value))
 
 
 class BulkStatusResponseSerializer(serializers.Serializer):
+    """Response summary for bulk status changes."""
     updated_ids = serializers.ListField(child=serializers.IntegerField())
     missing_ids = serializers.ListField(child=serializers.IntegerField())
     event_ids = serializers.ListField(child=serializers.IntegerField())
     count_updated = serializers.IntegerField()
 
 
+# Mapping from PlantStatus to corresponding EventType
 STATUS_TO_EVENT = {
     PlantStatus.SOLD: EventType.SELL,
     PlantStatus.DISCARDED: EventType.DISCARD,
@@ -68,6 +92,10 @@ class PlantOpsMixin:
     Adds ops to PlantViewSet:
       - POST /api/plants/bulk/status/
       - POST /api/plants/{id}/archive/
+
+    Concurrency / Idempotency:
+        - Bulk status is idempotent per request body.
+        - Archive enforces `If-Match` when header present (412 on mismatch).
     """
 
     @extend_schema(
@@ -87,6 +115,7 @@ class PlantOpsMixin:
     @action(detail=False, methods=["post"], url_path="bulk/status")
     @idempotent
     def bulk_status(self, request: Request) -> Response:
+        """Apply a new status to owned plants; returns updated/missing IDs and Event IDs."""
         ser = BulkStatusRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         ids = ser.validated_data["ids"]
@@ -134,6 +163,7 @@ class PlantOpsMixin:
     # -----------------------------------------------------------------------------
 
     class _ArchiveResponse(serializers.Serializer):
+        """Response body for plant `/archive/`."""
         id = serializers.IntegerField()
         archived = serializers.BooleanField()
         deleted_at = serializers.DateTimeField()
@@ -158,6 +188,7 @@ class PlantOpsMixin:
     @action(detail=True, methods=["post"], url_path="archive")
     @idempotent
     def archive(self, request: Request, pk: str | None = None) -> Response:
+        """Soft-delete the plant and revoke its active label token, if any."""
         plant: Plant = self.get_object()
         # Concurrency guard (no-op if ENFORCE_IF_MATCH=False)
         require_if_match(request, plant.updated_at)

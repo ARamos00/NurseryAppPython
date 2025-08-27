@@ -1,3 +1,43 @@
+"""
+Nursery domain models: taxa, materials, propagation, plants, events, labels, audit, webhooks.
+
+Overview
+--------
+- All models inherit ownership from `core.OwnedModel` (user + timestamps). Querysets must
+  be scoped by `request.user` in views. Object-level access is guarded by `IsOwner`.
+- Soft-delete:
+    * `PropagationBatch` and `Plant` support soft-delete via `is_deleted`/`deleted_at`.
+    * Default manager (`objects`) hides deleted rows; `objects_all` shows everything.
+- Events:
+    * Each `Event` targets exactly one of (`batch`, `plant`). Enforced by a DB
+      CheckConstraint **and** `clean()` validation. Includes optional `quantity_delta`.
+- Labels:
+    * `Label` attaches to any object via GenericForeignKey. `LabelToken` stores only
+      `token_hash` + `prefix` (privacy-by-design); raw tokens are shown elsewhere.
+    * `LabelVisit` records public scans with coarse request metadata (no auth linkage).
+- Audit:
+    * `AuditLog` stores minimal change information for creates/updates/deletes with
+      `user` (owner), `actor` (who did it), and request metadata.
+- Webhooks:
+    * `WebhookEndpoint` is user-owned; `WebhookDelivery` stores queued deliveries and
+      dispatch result metadata. Signing/HTTPS policy enforced in worker code.
+
+Security & tenancy
+------------------
+- All writes/reads must respect `OwnedModel` tenancy. See `IsOwner` permission.
+- `Event.clean()` ensures the target object belongs to the same owner (`user_id`).
+- Label tokens never store the raw secret; only hash + short prefix is persisted.
+
+Concurrency
+-----------
+- ETag/If-Match handling and idempotency are implemented in `core/utils`; these models
+  provide the timestamps and fields needed by those helpers but do not enforce policy.
+
+Comment style
+-------------
+- Inline comments prefer the tags: `WHY`, `NOTE`, `SECURITY`, `PERF`.
+"""
+
 from __future__ import annotations
 
 from django.conf import settings
@@ -16,8 +56,11 @@ from core.models import OwnedModel
 # -----------------------------------------------------------------------------
 class OwnedQuerySet(models.QuerySet):
     """
-    NOTE: This local alias exists to support type hints for SoftDeleteQuerySet
-    that extend core's OwnedModel queryset helpers in a model-specific file.
+    Local queryset with `for_user()/owned()` helpers.
+
+    NOTE:
+        This local alias exists so that `SoftDeleteQuerySet` can extend it in this
+        module without importing the core queryset class, while keeping type hints.
     """
     def for_user(self, user):
         if user is None or not getattr(user, "is_authenticated", False):
@@ -30,6 +73,7 @@ class OwnedQuerySet(models.QuerySet):
 
 
 class SoftDeleteQuerySet(OwnedQuerySet):
+    """Common filters for soft-deleted models."""
     def alive(self):
         return self.filter(is_deleted=False)
 
@@ -42,6 +86,7 @@ SoftDeleteManagerBase = models.Manager.from_queryset(SoftDeleteQuerySet)
 
 
 class SoftDeleteManager(SoftDeleteManagerBase):
+    """Default manager for soft-deletable models: hides rows with `is_deleted=True`."""
     def get_queryset(self):
         return super().get_queryset().filter(is_deleted=False)
 
@@ -53,6 +98,7 @@ AllRowsManager = models.Manager.from_queryset(SoftDeleteQuerySet)
 # Domain models
 # -----------------------------------------------------------------------------
 class Taxon(OwnedModel):
+    """Botanical identity of a plant, optionally refined by cultivar/clone."""
     scientific_name = models.CharField(max_length=200)
     cultivar = models.CharField(max_length=100, blank=True)
     clone_code = models.CharField(max_length=50, blank=True)
@@ -79,6 +125,7 @@ class Taxon(OwnedModel):
 
 
 class MaterialType(models.TextChoices):
+    """Kinds of source material used to start propagation batches."""
     SEED = "SEED", "Seed"
     CUTTING = "CUTTING", "Cutting"
     SCION = "SCION", "Scion"
@@ -89,6 +136,12 @@ class MaterialType(models.TextChoices):
 
 
 class PlantMaterial(OwnedModel):
+    """
+    Track lots of input material per taxon.
+
+    Uniqueness:
+        (user, taxon, material_type, lot_code) must be unique when `lot_code` is non-empty.
+    """
     taxon = models.ForeignKey(Taxon, on_delete=models.CASCADE, related_name="materials")
     material_type = models.CharField(max_length=16, choices=MaterialType.choices)
     lot_code = models.CharField(
@@ -120,6 +173,7 @@ class PlantMaterial(OwnedModel):
 
 
 class PropagationMethod(models.TextChoices):
+    """Propagation approaches used by batches."""
     SEED_SOWING = "SEED_SOWING", "Seed sowing"
     CUTTING_ROOTING = "CUTTING_ROOTING", "Cutting rooting"
     GRAFTING = "GRAFTING", "Grafting"
@@ -130,6 +184,7 @@ class PropagationMethod(models.TextChoices):
 
 
 class BatchStatus(models.TextChoices):
+    """Lifecycle stages of a propagation batch."""
     STARTED = "STARTED", "Started"
     GERMINATING = "GERMINATING", "Germinating/Rooting"
     POTTED = "POTTED", "Potted up"
@@ -141,6 +196,16 @@ class BatchStatus(models.TextChoices):
 
 
 class PropagationBatch(OwnedModel):
+    """
+    A set of starts (seeds, cuttings, etc.) from a single `PlantMaterial`.
+
+    Soft-delete:
+        Uses `is_deleted`/`deleted_at`. Default manager hides deleted batches.
+
+    Derived data:
+        `available_quantity()` sums `quantity_started` with `Event.quantity_delta`
+        across this batch's events (e.g., germination +N, loss -N).
+    """
     material = models.ForeignKey(PlantMaterial, on_delete=models.CASCADE, related_name="batches")
     method = models.CharField(max_length=24, choices=PropagationMethod.choices)
     status = models.CharField(max_length=16, choices=BatchStatus.choices, default=BatchStatus.STARTED)
@@ -172,8 +237,17 @@ class PropagationBatch(OwnedModel):
     def available_quantity(self) -> int:
         """
         Remaining units available in the batch (not yet harvested or culled).
-        Computed as: quantity_started + sum(quantity_delta for events on this batch)
-        where harvest/cull write negative deltas.
+
+        Computation:
+            quantity_started + sum(quantity_delta for events on this batch)
+            where harvest/cull write negative deltas.
+
+        Returns:
+            int: Non-negative integer (not enforced here).
+
+        PERF:
+            This triggers a small aggregation query on the reverse relation; cache at
+            the view layer if called repeatedly within a single request.
         """
         agg = self.events.aggregate(total=Sum("quantity_delta"))
         total_delta = agg["total"] or 0
@@ -181,6 +255,7 @@ class PropagationBatch(OwnedModel):
 
 
 class PlantStatus(models.TextChoices):
+    """Lifecycle of individual plants or grouped counts."""
     ACTIVE = "ACTIVE", "Active"
     DORMANT = "DORMANT", "Dormant"
     SOLD = "SOLD", "Sold"
@@ -189,6 +264,12 @@ class PlantStatus(models.TextChoices):
 
 
 class Plant(OwnedModel):
+    """
+    Individual plants or grouped counts linked to a `Taxon`, optionally from a batch.
+
+    Soft-delete:
+        Uses `is_deleted`/`deleted_at`. Default manager hides deleted plants.
+    """
     taxon = models.ForeignKey(Taxon, on_delete=models.CASCADE, related_name="plants")
     batch = models.ForeignKey(
         PropagationBatch, on_delete=models.SET_NULL, null=True, blank=True, related_name="plants"
@@ -220,6 +301,7 @@ class Plant(OwnedModel):
 
 
 class EventType(models.TextChoices):
+    """User actions/observations against a batch or plant."""
     NOTE = "NOTE", "Note"
     SOW = "SOW", "Sow / Start"
     GERMINATE = "GERMINATE", "Germination"
@@ -235,7 +317,13 @@ class EventType(models.TextChoices):
 class Event(OwnedModel):
     """
     Timestamped action/observation for either a batch OR a plant.
-    Exactly one of (batch, plant) must be set; enforced by constraint + clean().
+
+    Invariant:
+        Exactly one of (`batch`, `plant`) must be set.
+        Enforced at DB-level (CheckConstraint) and in `clean()`.
+
+    Ownership:
+        # SECURITY: The target object's owner must match `Event.user`. Validated in `clean()`.
     """
     batch = models.ForeignKey(
         PropagationBatch, on_delete=models.CASCADE, null=True, blank=True, related_name="events"
@@ -271,6 +359,7 @@ class Event(OwnedModel):
         ]
 
     def clean(self):
+        """Validate XOR and owner alignment with the selected target."""
         super().clean()
         if self.batch_id and self.plant_id:
             raise ValidationError("Choose either a batch or a plant, not both.")
@@ -291,6 +380,13 @@ from django.contrib.contenttypes.models import ContentType  # noqa: E402
 
 
 class Label(OwnedModel):
+    """
+    Generic label attached to any target object via content types.
+
+    Token lifecycle:
+        A label may have many `LabelToken`s (historical), with at most one active
+        (`active_token`). Rotating a token revokes the old one and sets the new.
+    """
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
@@ -320,6 +416,14 @@ class Label(OwnedModel):
 
 
 class LabelToken(models.Model):
+    """
+    Stored representation of a public label token.
+
+    Privacy:
+        - Only the SHA-256 `token_hash` and a short `prefix` are persisted.
+        - The raw token value is never stored and should only be displayed once at
+          creation/rotation time to the owner.
+    """
     label = models.ForeignKey(Label, on_delete=models.CASCADE, related_name="tokens")
     token_hash = models.CharField(max_length=64, unique=True)
     prefix = models.CharField(max_length=12)
@@ -341,7 +445,10 @@ class LabelToken(models.Model):
 class LabelVisit(OwnedModel):
     """
     A single scan of a Label's public URL.
-    Privacy: no linkage to an authenticated viewer; only coarse request metadata.
+
+    Privacy:
+        Only coarse request metadata (IP, UA, referrer) is captured. There is no
+        linkage to an authenticated viewer; `user` is the label owner's id.
     """
     label = models.ForeignKey("nursery.Label", on_delete=models.CASCADE, related_name="visits")
     token = models.ForeignKey("nursery.LabelToken", on_delete=models.SET_NULL, null=True, blank=True, related_name="visits")
@@ -362,6 +469,7 @@ class LabelVisit(OwnedModel):
 
 
 class AuditAction(models.TextChoices):
+    """CRUD-style actions recorded in the audit log."""
     CREATE = "create", "Create"
     UPDATE = "update", "Update"
     DELETE = "delete", "Delete"
@@ -370,12 +478,18 @@ class AuditAction(models.TextChoices):
 class AuditLog(models.Model):
     """
     Lightweight audit trail for API-originated mutations.
-    - `user` is the *owner* of the mutated record (for tenancy scoping).
-    - `actor` is the authenticated user who performed the mutation (usually the same as `user`).
-    - `content_type` + `object_id` identifies the mutated object.
-    - `action` ∈ {"create","update","delete"}.
-    - `changes`: JSON dictionary of field diffs; for updates stores {field: [old, new]}.
-      For creates, stores {"_after": {...snapshot...}}; for deletes, {"_before": {...snapshot...}}.
+
+    Ownership fields:
+        - `user`: owner of the mutated record (for tenancy scoping).
+        - `actor`: authenticated user who performed the mutation (usually same as `user`).
+
+    Content identification:
+        - `content_type` + `object_id` point to the mutated object.
+
+    Change representation:
+        - For updates: `changes` stores `{field: [old, new]}`
+        - For creates: `{"_after": {...snapshot...}}`
+        - For deletes: `{"_before": {...snapshot...}}`
     """
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -413,12 +527,14 @@ class AuditLog(models.Model):
 
 
 class WebhookEventType(models.TextChoices):
+    """Event keys emitted to webhook subscribers."""
     EVENT_CREATED = "event.created", "Event created"
     PLANT_STATUS_CHANGED = "plant.status_changed", "Plant status changed"
     BATCH_STATUS_CHANGED = "batch.status_changed", "Batch status changed"
 
 
 class WebhookDeliveryStatus(models.TextChoices):
+    """Delivery lifecycle for webhook attempts."""
     QUEUED = "QUEUED", "Queued"
     SENT = "SENT", "Sent"
     FAILED = "FAILED", "Failed"
@@ -426,8 +542,15 @@ class WebhookDeliveryStatus(models.TextChoices):
 
 class WebhookEndpoint(OwnedModel):
     """
-    A user-owned webhook endpoint. `secret` is used to compute HMAC-SHA256
-    signatures for each POST. Never return `secret` via API; only allow write.
+    A user-owned webhook endpoint.
+
+    Security:
+        - `secret` is used to compute HMAC-SHA256 signatures when delivering.
+        - Never return `secret` via API; expose only `secret_last4` for display.
+        - URL shape is validated; production may additionally require HTTPS.
+
+    Subscriptions:
+        `event_types` contains a list of event strings. Empty list or ["*"] means "all".
     """
     name = models.CharField(max_length=100, blank=True, default="")
     url = models.URLField(max_length=500)
@@ -451,6 +574,7 @@ class WebhookEndpoint(OwnedModel):
         ]
 
     def clean(self):
+        """Validate URL, normalize subscriptions, and cache secret tail for display."""
         super().clean()
         # Validate URL shape early
         try:
@@ -472,8 +596,14 @@ class WebhookEndpoint(OwnedModel):
 
 class WebhookDelivery(OwnedModel):
     """
-    A single delivery attempt payload for an endpoint. Immutable payload, mutable
-    attempt/response fields. Owner equals endpoint.user (duplicated for scoping).
+    A single delivery attempt payload for an endpoint.
+
+    Immutability & retries:
+        - `payload` is immutable after enqueue.
+        - Attempt counters/timestamps and response metadata are updated by the worker.
+
+    Tenancy:
+        Owner equals `endpoint.user` and is duplicated here for scoping and indexing.
     """
     endpoint = models.ForeignKey(WebhookEndpoint, on_delete=models.CASCADE, related_name="deliveries")
     event_type = models.CharField(max_length=48, choices=WebhookEventType.choices)

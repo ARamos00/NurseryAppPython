@@ -1,3 +1,23 @@
+"""
+Filtering, search, ordering, and pagination tests across core resources.
+
+What these tests verify
+-----------------------
+- **Taxa**: exact filtering on fields, search across cultivar, and ordering.
+- **PlantMaterial**: filtering by FK and choice field, cross-field search, ordering.
+- **PropagationBatch**: filtering by status, explicit ordering, and pagination
+  behavior that honors DRF's configured `PAGE_SIZE`.
+- **Plant**: filtering by status/batch and ordering by date fields.
+- **Event**: filtering by type/batch, ordering by timestamp, and pagination.
+
+Notes
+-----
+- The dataset in `setUp()` seeds multiple related rows for each resource so the
+  filters produce both positive and negative matches.
+- Pagination tests compute the default page size from settings to remain stable
+  if the project adjusts its `REST_FRAMEWORK["PAGE_SIZE"]`.
+"""
+
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
@@ -18,7 +38,19 @@ from nursery.models import (
 
 
 class ApiFiltersOrderingPaginationTests(APITestCase):
+    """End-to-end assertions for list filtering, search, ordering, and pagination."""
+
     def setUp(self):
+        """
+        Seed a tenant-scoped dataset covering all main resources.
+
+        Layout:
+            Taxa: Acer palmatum (cultivar Seiryu), Acer rubrum (October Glory), Betula pendula
+            Materials: seed for palmatum; cutting for rubrum; seed for betula
+            Batches: one per material with differing methods/statuses/dates
+            Plants: one per batch with varying statuses and acquired_on dates
+            Events: a short timeline (5) on b1 spaced by hours
+        """
         self.user = User.objects.create_user(username="alice", password="pass12345")
         self.client = APIClient()
         self.client.login(username="alice", password="pass12345")
@@ -55,7 +87,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
             status=BatchStatus.STARTED,
             started_on=earlier,
             quantity_started=20,
-            notes="pal seed"
+            notes="pal seed",
         )
         self.b2 = PropagationBatch.objects.create(
             user=self.user,
@@ -64,7 +96,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
             status=BatchStatus.GERMINATING,
             started_on=today,
             quantity_started=10,
-            notes="rub cutting"
+            notes="rub cutting",
         )
         self.b3 = PropagationBatch.objects.create(
             user=self.user,
@@ -73,7 +105,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
             status=BatchStatus.POTTED,
             started_on=today,
             quantity_started=5,
-            notes="bet seed"
+            notes="bet seed",
         )
 
         # --- Plants ---
@@ -124,6 +156,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
     # Taxon: filter / search / order
     # -------------------------
     def test_taxa_filter_search_order(self):
+        """Taxa list supports exact field filters, search, and ascending/desc ordering."""
         # filter exact by scientific_name
         r = self.client.get("/api/taxa/", {"scientific_name": "Acer palmatum"})
         self.assertEqual(r.status_code, 200)
@@ -150,6 +183,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
     # PlantMaterial: filter / search / order
     # -------------------------
     def test_materials_filter_search_order(self):
+        """Materials list filters by FK/choice, supports search, and orders by allowed fields."""
         # filter by taxon
         r = self.client.get("/api/materials/", {"taxon": self.t_acer_pal.id})
         self.assertEqual(r.status_code, 200)
@@ -180,6 +214,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
     # PropagationBatch: filter / order / pagination (default PAGE_SIZE)
     # -------------------------
     def test_batches_filter_order_pagination(self):
+        """Batches list supports filtering, explicit ordering, and paginates by configured PAGE_SIZE."""
         # filter by status
         r = self.client.get("/api/batches/", {"status": "STARTED"})
         self.assertEqual(r.status_code, 200)
@@ -192,7 +227,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
         started_on_list = [row["started_on"] for row in r_ordered.data["results"]]
         self.assertEqual(started_on_list, sorted(started_on_list, reverse=True))
 
-        # Create enough batches to exceed default PAGE_SIZE (25)
+        # Create enough batches to exceed default PAGE_SIZE (25 by default)
         page_size = settings.REST_FRAMEWORK.get("PAGE_SIZE", 25)
         target_total = max(30, page_size + 5)
         current_total = 3
@@ -225,6 +260,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
     # Plant: filter / order
     # -------------------------
     def test_plants_filter_order(self):
+        """Plants list filters by status/batch and supports ordering by date fields."""
         # filter by status
         r = self.client.get("/api/plants/", {"status": PlantStatus.DORMANT})
         self.assertEqual(r.status_code, 200)
@@ -246,6 +282,7 @@ class ApiFiltersOrderingPaginationTests(APITestCase):
     # Event: filter / order / pagination (default PAGE_SIZE)
     # -------------------------
     def test_events_filter_order_pagination(self):
+        """Events list supports filtering, ordering by timestamp, and paginates by PAGE_SIZE."""
         # filter by event_type
         r = self.client.get("/api/events/", {"event_type": EventType.WATER})
         self.assertEqual(r.status_code, 200)

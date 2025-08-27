@@ -1,5 +1,30 @@
 from __future__ import annotations
 
+"""
+Webhook delivery worker (pull-based, synchronous HTTP client).
+
+Overview
+--------
+- Fetches queued deliveries (`WebhookDeliveryStatus.QUEUED`) that are due and
+  POSTs JSON to each endpoint, signing the body with HMAC-SHA256.
+- Applies exponential backoff with configurable schedule, attempt cap, and
+  per-request timeout.
+- Stores response metadata (status/headers/body) and timing for observability.
+
+Security
+--------
+- Signature header name and user agent are configurable via settings.
+- The signature is `sha256=<hex>` of the UTF-8 JSON body using the endpoint's
+  shared secret.
+- Delivery is disabled when `WEBHOOKS_DELIVERY_ENABLED=False` (feature flag).
+
+Operational Notes
+-----------------
+- Uses stdlib `urllib.request` to avoid external dependencies.
+- Idempotency: the worker only attempts rows in QUEUED state and updates rows
+  atomically to prevent duplicate attempts by multiple workers.
+"""
+
 import json
 import hmac
 import hashlib
@@ -17,13 +42,30 @@ from nursery.models import WebhookDelivery, WebhookDeliveryStatus
 
 
 def _sign(secret: str, body_bytes: bytes) -> str:
+    """
+    Compute an HMAC-SHA256 signature for the request body.
+
+    Args:
+        secret: The endpoint's shared secret.
+        body_bytes: UTF-8 encoded JSON body.
+
+    Returns:
+        A header value `sha256=<hex-digest>` suitable for transmission.
+    """
     mac = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
     return f"sha256={mac}"
 
 
 def _parse_backoff_schedule(cfg) -> List[int]:
     """
-    Accept either a comma-separated string or a list/tuple of ints.
+    Parse a backoff schedule from settings.
+
+    Accepts:
+        - Comma-separated string (e.g., "60,300,1800") -> [60, 300, 1800]
+        - List/tuple of numbers -> coerced to ints
+
+    Fallback:
+        Returns a conservative default: 60s, 5m, 30m, 2h, 24h.
     """
     if isinstance(cfg, str):
         parts = [p.strip() for p in cfg.split(",") if p.strip()]
@@ -43,12 +85,29 @@ def _parse_backoff_schedule(cfg) -> List[int]:
 
 
 class Command(BaseCommand):
+    """
+    Deliver queued webhooks with HMAC-signed JSON bodies.
+
+    Behavior:
+        - Respects `WEBHOOKS_DELIVERY_ENABLED` feature flag.
+        - Picks up up to `--limit` due deliveries ordered by creation time.
+        - For each delivery: POST, record outcome, and schedule retry as needed.
+    """
     help = "Delivers queued webhooks (POST JSON with HMAC-SHA256 signature)."
 
     def add_arguments(self, parser):
+        """Add `--limit` to control batch size for this run."""
         parser.add_argument("--limit", type=int, default=50, help="Maximum deliveries to process this run")
 
     def handle(self, *args, **opts):
+        """
+        Main worker loop for a single invocation.
+
+        NOTE:
+            This command is intended to be run periodically (e.g., every minute)
+            by a scheduler. For continuous processing, supervise with an external
+            runner that re-invokes the command.
+        """
         if not getattr(settings, "WEBHOOKS_DELIVERY_ENABLED", True):
             self.stdout.write(self.style.WARNING("Delivery disabled (WEBHOOKS_DELIVERY_ENABLED=False). Exiting."))
             return
@@ -72,6 +131,19 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"Processed {processed} delivery(ies)."))
 
     def _process_one(self, d: WebhookDelivery):
+        """
+        Attempt delivery of a single row and update its persisted state.
+
+        Steps:
+            1) Serialize payload with compact separators (UTF-8).
+            2) Sign with HMAC-SHA256; attach headers and user agent.
+            3) POST with timeout; record response status/headers/body and timing.
+            4) On non-2xx or network errors, schedule a retry; else mark SENT.
+
+        PERF:
+            Uses stdlib urllib to avoid additional dependencies; acceptable for
+            moderate volumes. Consider async/iohttp if volumes grow (out of scope).
+        """
         ep = d.endpoint
         body = json.dumps(d.payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         signature = _sign(ep.secret, body)
@@ -108,6 +180,7 @@ class Command(BaseCommand):
             else:
                 self._schedule_retry(d, f"HTTP {status_code}")
         except (HTTPError, URLError, TimeoutError) as e:
+            # NOTE: Treat network/timeout/HTTPError uniformly for scheduling.
             d.response_status = None
             d.response_headers = {}
             d.response_body = ""
@@ -116,6 +189,7 @@ class Command(BaseCommand):
             d.attempt_count += 1
             self._schedule_retry(d, str(e))
         finally:
+            # Persist all changes in one save for consistency
             d.save(update_fields=[
                 "response_status", "response_headers", "response_body",
                 "request_duration_ms", "last_attempt_at", "attempt_count",
@@ -124,7 +198,15 @@ class Command(BaseCommand):
 
     def _schedule_retry(self, d: WebhookDelivery, reason: str):
         """
-        Decide whether to retry later or park in DLQ (FAILED).
+        Decide whether to retry later or park in DLQ (FAILED), then schedule next.
+
+        Policy:
+            - If attempts >= max (from settings), mark FAILED with no next attempt.
+            - Else: set next_attempt_at based on backoff schedule and keep QUEUED.
+
+        Settings:
+            - WEBHOOKS_BACKOFF_SCHEDULE: comma-separated seconds or list[int]
+            - WEBHOOKS_MAX_ATTEMPTS: int; defaults to len(schedule)
         """
         d.status = WebhookDeliveryStatus.FAILED  # updated to QUEUED if we will retry
         d.last_error = reason

@@ -1,3 +1,25 @@
+"""
+Tests for the inventory and production report endpoints.
+
+What these tests verify
+-----------------------
+- **Inventory report** (`/api/reports/inventory/`):
+  * JSON payload contains a `rows` array and a `totals` object.
+  * Totals are correct for the seeded data (plants count and summed quantity).
+  * CSV variant responds with `text/csv` and includes expected headers.
+
+- **Production report** (`/api/reports/production/`):
+  * JSON payload contains `summary_by_type` with per-event-type counts/quantities.
+  * Optional `group_by=day` timeseries is present and shaped as expected.
+  * CSV variant responds with `text/csv`.
+
+Notes
+-----
+- Tests log in as a real user to exercise owner-scoped querysets.
+- Minimal, deterministic fixtures are built in `setUp()` so assertions remain
+  stable and easy to reason about.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -23,7 +45,24 @@ from nursery.models import (
 
 
 class ReportsApiTests(TestCase):
+    """End-to-end assertions for inventory and production report APIs."""
+
     def setUp(self):
+        """
+        Seed a minimal dataset:
+
+        - Two taxa (t1, t2).
+        - One material (SEED) and a batch for t1.
+        - Three plants:
+            p1: t1/batch, quantity=3, ACTIVE
+            p2: t1/batch, quantity=2, SOLD
+            p3: t2/no-batch, quantity=5, ACTIVE
+          => totals: plants=3, quantity=10
+        - Production events (relative to `now`):
+            SOW(+10) on batch b1 (5 days ago)
+            NOTE on plant p1 (3 days ago)
+            SELL(-3) on plant p1 (1 day ago)
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="u1", password="pw")
         self.client = APIClient()
@@ -50,6 +89,7 @@ class ReportsApiTests(TestCase):
         Event.objects.create(user=self.user, plant=self.p1, event_type=EventType.SELL, quantity_delta=-3, happened_at=now - timedelta(days=1))
 
     def test_inventory_json_and_csv(self):
+        """Inventory report returns JSON with totals and a CSV variant with headers."""
         r = self.client.get("/api/reports/inventory/")
         self.assertEqual(r.status_code, 200, r.content)
         self.assertIn("rows", r.data)
@@ -68,9 +108,11 @@ class ReportsApiTests(TestCase):
         reader = csv.DictReader(io.StringIO(content))
         cs_rows = list(reader)
         self.assertGreaterEqual(len(cs_rows), 2)
+        # WHY: 'status' helps spreadsheet consumers slice inventory by state.
         self.assertIn("status", reader.fieldnames)
 
     def test_production_summary_and_timeseries(self):
+        """Production report exposes a per-type summary, daily timeseries, and CSV."""
         r = self.client.get("/api/reports/production/")
         self.assertEqual(r.status_code, 200, r.content)
         self.assertIn("summary_by_type", r.data)

@@ -1,3 +1,20 @@
+"""Read-only audit log API with owner scoping and flexible filtering.
+
+Overview
+--------
+- Auth: required (`IsAuthenticated`).
+- Tenancy: non-staff users only see logs where `AuditLog.user == request.user`.
+- Throttle: `audit-read` scope protects heavy reads.
+- Filters (query params):
+    * model: "plant" or "app.model" (resolved via ContentType)
+    * object_id: integer
+    * action: create|update|delete
+    * date_from/date_to: ISO 8601 datetimes (inclusive; naïve made aware)
+    * user_id: staff-only, filter by owning user
+- Schema: during schema generation, `swagger_fake_view=True` is set; we return an
+  inert queryset to avoid DB lookups tied to a fake request.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -74,6 +91,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         qs = AuditLog.objects.select_related("actor", "content_type", "user").all()
         user = self.request.user
+        # SECURITY: non-staff can only see their own tenant's logs.
         if not getattr(user, "is_staff", False):
             qs = qs.filter(user=user)
         return qs
@@ -81,6 +99,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     # ---- helpers for filtering ------------------------------------------------
 
     def _parse_dt(self, s: str | None) -> datetime | None:
+        """Parse ISO datetime; make aware if naïve; return None on invalid/missing."""
         if not s:
             return None
         dt = parse_datetime(s)
@@ -89,6 +108,10 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         return dt
 
     def filter_queryset(self, queryset):
+        """
+        Apply query-parameter filters. Invalid values produce empty results
+        rather than 400 to keep the endpoint forgiving for UIs.
+        """
         request: Request = self.request
         params = request.query_params
 

@@ -1,3 +1,26 @@
+"""
+Seed onboarding wizard API: create a Taxon → PlantMaterial (SEED) → PropagationBatch
+(SEED_SOWING) → initial SOW Event, step by step or in one shot.
+
+Security & tenancy
+------------------
+- Requires authentication and enforces ownership: `IsAuthenticated` + explicit
+  `IsOwner` checks for fetched objects via `_ensure_owner`.
+- Each create call assigns `user=request.user` using the corresponding serializer.
+
+QoS & safety
+------------
+- Throttled with scope `wizard-seed` (see DRF DEFAULT_THROTTLE_RATES).
+- Idempotent: actions are decorated with `@idempotent`, which replays the first
+  successful response for the same `(user, method, path, body-hash)` within the
+  retention window. Clients should send an `Idempotency-Key` header.
+
+Notes
+-----
+- Validation enforces `material_type="SEED"` and `method="SEED_SOWING"`.
+- Steps can be invoked individually or atomically via `compose`.
+"""
+
 from typing import Dict, Optional
 
 from django.db import transaction
@@ -37,26 +60,77 @@ class EmptySerializer(serializers.Serializer):
 # ---- Schema request/response serializers ----
 
 class SelectTaxonRequestSerializer(serializers.Serializer):
+    """Step 1 request: either reference an existing taxon or provide a payload.
+
+    Fields
+    ------
+    taxon_id : int, optional
+        Primary key of an existing `Taxon` owned by the caller.
+    taxon : TaxonSerializer, optional
+        Payload for creating a new `Taxon` (owner is set to the caller).
+    """
     taxon_id = serializers.IntegerField(required=False)
     taxon = TaxonSerializer(required=False)
 
 
 class CreateMaterialRequestSerializer(serializers.Serializer):
+    """Step 2 request: create a `PlantMaterial` for a given taxon.
+
+    Fields
+    ------
+    taxon_id : int
+        The owning taxon id (must belong to the caller).
+    material : PlantMaterialSerializer
+        Payload for the material; `material_type` must be `"SEED"`.
+    """
     taxon_id = serializers.IntegerField()
     material = PlantMaterialSerializer()
 
 
 class CreateBatchRequestSerializer(serializers.Serializer):
+    """Step 3 request: create a `PropagationBatch` from a material.
+
+    Fields
+    ------
+    material_id : int
+        The material id (must belong to the caller).
+    batch : PropagationBatchSerializer
+        Payload for the batch; `method` must be `"SEED_SOWING"`, and
+        `quantity_started` must be an integer ≥ 1.
+    """
     material_id = serializers.IntegerField()
     batch = PropagationBatchSerializer()
 
 
 class LogSowRequestSerializer(serializers.Serializer):
+    """Step 4 request: log the initial SOW event for a batch.
+
+    Fields
+    ------
+    batch_id : int
+        The batch id (must belong to the caller).
+    event : EventSerializer, optional
+        Optional event payload to override defaults.
+    """
     batch_id = serializers.IntegerField()
     event = EventSerializer(required=False)
 
 
 class ComposeRequestSerializer(serializers.Serializer):
+    """One-shot request: create Taxon (optional), Material (SEED), Batch (SEED_SOWING),
+    and SOW Event in a single transaction.
+
+    Fields
+    ------
+    taxon : TaxonSerializer, optional
+        Optional spec for creating or referencing a taxon (see `compose` docs).
+    material : PlantMaterialSerializer
+        Must specify `material_type="SEED"`.
+    batch : PropagationBatchSerializer
+        Must specify `method="SEED_SOWING"` and a valid `quantity_started`.
+    event : EventSerializer, optional
+        Optional overrides (defaults are applied when not provided).
+    """
     taxon = TaxonSerializer(required=False)
     material = PlantMaterialSerializer()
     batch = PropagationBatchSerializer()
@@ -64,27 +138,32 @@ class ComposeRequestSerializer(serializers.Serializer):
 
 
 class SelectTaxonResponseSerializer(serializers.Serializer):
+    """Step 1 response: selected or created taxon id and the next-step link."""
     taxon_id = serializers.IntegerField()
     next = serializers.DictField(child=serializers.CharField())
 
 
 class CreateMaterialResponseSerializer(serializers.Serializer):
+    """Step 2 response: created material id and the next-step link."""
     material_id = serializers.IntegerField()
     next = serializers.DictField(child=serializers.CharField())
 
 
 class CreateBatchResponseSerializer(serializers.Serializer):
+    """Step 3 response: created batch id and the next-step link."""
     batch_id = serializers.IntegerField()
     next = serializers.DictField(child=serializers.CharField())
 
 
 class LogSowResponseSerializer(serializers.Serializer):
+    """Step 4 response: created event id, completion flag, and helpful links."""
     event_id = serializers.IntegerField()
     complete = serializers.BooleanField()
     links = serializers.DictField(child=serializers.CharField())
 
 
 class ComposeResponseSerializer(serializers.Serializer):
+    """One-shot response: identifiers for all created records."""
     taxon_id = serializers.IntegerField()
     material_id = serializers.IntegerField()
     batch_id = serializers.IntegerField()
@@ -120,7 +199,19 @@ class WizardSeedViewSet(viewsets.ViewSet):
     # ---- helpers ----
 
     def _ensure_owner(self, obj, request: Request) -> None:
-        """Raise 404 for non-owned objects (consistent with IsOwner)."""
+        """Raise 404 (NotFound) when an object does not belong to the caller.
+
+        Args:
+            obj: Model instance with a `user_id` attribute.
+            request: The current DRF request.
+
+        Raises:
+            rest_framework.exceptions.NotFound: When ownership does not match.
+
+        SECURITY:
+            We deliberately raise 404 instead of 403 to avoid leaking existence
+            of other tenants' records.
+        """
         if getattr(obj, "user_id", None) != request.user.id:
             from rest_framework.exceptions import NotFound
             raise NotFound()
@@ -130,7 +221,12 @@ class WizardSeedViewSet(viewsets.ViewSet):
         Build the next-step link using DRF route names for robustness.
         Falls back to a stable relative path if reversing fails.
 
-        friendly: one of {"material","batch","sow"}
+        Args:
+            request: Current request, used by `drf_reverse` to build absolute URLs.
+            friendly: One of {"material", "batch", "sow"} identifying the next step.
+
+        Returns:
+            Dict[str, Dict[str, str]]: `{"next": {"<friendly>": "<url>"}}`
         """
         action_map = {"material": "create-material", "batch": "create-batch", "sow": "log-sow"}
         url_path = action_map[friendly]
@@ -154,6 +250,22 @@ class WizardSeedViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="select-taxon")
     @idempotent
     def select_taxon(self, request: Request) -> Response:
+        """Select or create a `Taxon` and return the id plus the next-step link.
+
+        Args:
+            request: DRF request containing either `taxon_id` or `taxon` payload.
+
+        Returns:
+            200 with existing id, or 201 with created id; both include `next`.
+
+        Raises:
+            400 if both or neither of `taxon_id` / `taxon` are provided.
+            404 if `taxon_id` does not resolve or is not owned by the caller.
+
+        Idempotency:
+            Safe to retry with the same Idempotency-Key; the same response body
+            will be replayed if the first call succeeded.
+        """
         data = request.data or {}
         taxon_id = data.get("taxon_id")
         taxon_payload = data.get("taxon")
@@ -193,6 +305,18 @@ class WizardSeedViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="create-material")
     @idempotent
     def create_material(self, request: Request) -> Response:
+        """Create a `PlantMaterial` (`material_type="SEED"`) for a given taxon.
+
+        Args:
+            request: DRF request containing `taxon_id` and `material` payload.
+
+        Returns:
+            201 with the created `material_id` and next-step link.
+
+        Raises:
+            400 if `taxon_id` missing or material type is not `"SEED"`.
+            404 if `taxon_id` not found or not owned by the caller.
+        """
         data = request.data or {}
         taxon_id = data.get("taxon_id")
         material = data.get("material") or {}
@@ -230,6 +354,19 @@ class WizardSeedViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="create-batch")
     @idempotent
     def create_batch(self, request: Request) -> Response:
+        """Create a `PropagationBatch` (`method="SEED_SOWING"`) from a material.
+
+        Args:
+            request: DRF request containing `material_id` and `batch` payload.
+
+        Returns:
+            201 with the created `batch_id` and next-step link.
+
+        Raises:
+            400 if `material_id` missing, method not `"SEED_SOWING"`,
+                or `quantity_started` invalid (< 1 or non-integer).
+            404 if `material_id` not found or not owned by the caller.
+        """
         data = request.data or {}
         material_id = data.get("material_id")
         batch = data.get("batch") or {}
@@ -274,6 +411,18 @@ class WizardSeedViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="log-sow")
     @idempotent
     def log_sow(self, request: Request) -> Response:
+        """Log the initial `SOW` event for the batch created in step 3.
+
+        Args:
+            request: DRF request containing `batch_id` and optional `event` payload.
+
+        Returns:
+            201 with the created `event_id`, `"complete": true`, and helpful links.
+
+        Raises:
+            400 if `batch_id` missing.
+            404 if `batch_id` not found or not owned by the caller.
+        """
         data = request.data or {}
         batch_id = data.get("batch_id")
         event = (data.get("event") or {}).copy()
@@ -317,6 +466,22 @@ class WizardSeedViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="compose")
     @idempotent
     def compose(self, request: Request) -> Response:
+        """Create all four records in a single transaction with validation.
+
+        Args:
+            request: DRF request containing `taxon` (optional), `material`, `batch`,
+                and optional `event` payload.
+
+        Returns:
+            201 with ids for taxon/material/batch/event.
+
+        Raises:
+            400 for invalid material type, method, or quantity.
+            404 when referencing a taxon id not owned by the caller.
+
+        Concurrency:
+            The transaction ensures either all four records are created or none.
+        """
         payload = request.data or {}
         taxon_spec = payload.get("taxon") or {}
         material_spec = payload.get("material") or {}

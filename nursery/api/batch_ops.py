@@ -1,5 +1,30 @@
 from __future__ import annotations
 
+"""
+Custom operations for `PropagationBatch` resources.
+
+Actions (all POST):
+- `/harvest/`: Move quantity from a batch into a new `Plant` and write matching Events
+  (negative delta on batch, positive on plant). Returns IDs and updated availability.
+- `/cull/`: Reduce remaining batch quantity (negative Event).
+- `/complete/`: Mark batch as COMPLETED (requires zero remaining unless `force=true`).
+- `/archive/`: Soft-delete the batch and revoke its active label token (if any).
+
+Cross-cutting concerns
+----------------------
+- **Optimistic concurrency**: Each action enforces `If-Match` when the header is
+  provided (412 on mismatch) via `require_if_match()`. Views/settings decide if
+  the header is *required*.
+- **Idempotency**: Actions are decorated with `@idempotent` so identical retries
+  replay the first successful response keyed by (user, key, method, path, body-hash).
+- **Audit**: These actions write `Event` rows; higher-level ViewSet handles AuditLog.
+
+Security
+--------
+- All lookups occur through `self.get_object()`, which is owner-scoped by the base
+  ViewSet. New objects (e.g., harvested Plant) set `user=request.user`.
+"""
+
 from typing import Optional  # may be used by other ops in this module
 
 from django.contrib.contenttypes.models import ContentType
@@ -36,12 +61,14 @@ from nursery.schema import (
 # ---------- Serializer definitions (local to ops) ----------
 
 class HarvestRequestSerializer(serializers.Serializer):
+    """Request body for `/harvest/`."""
     quantity = serializers.IntegerField(min_value=1)
     acquired_on = serializers.DateField(required=False)
     status = serializers.ChoiceField(choices=PlantStatus.choices, required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
 
 class HarvestResponseSerializer(serializers.Serializer):
+    """Response body for `/harvest/`."""
     plant_id = serializers.IntegerField()
     batch_id = serializers.IntegerField()
     available_quantity = serializers.IntegerField()
@@ -50,18 +77,22 @@ class HarvestResponseSerializer(serializers.Serializer):
     plant_event_id = serializers.IntegerField()
 
 class CullRequestSerializer(serializers.Serializer):
+    """Request body for `/cull/`."""
     quantity = serializers.IntegerField(min_value=1)
     notes = serializers.CharField(required=False, allow_blank=True)
 
 class CullResponseSerializer(serializers.Serializer):
+    """Response body for `/cull/`."""
     batch_id = serializers.IntegerField()
     available_quantity = serializers.IntegerField()
     batch_event_id = serializers.IntegerField()
 
 class CompleteRequestSerializer(serializers.Serializer):
+    """Request body for `/complete/`."""
     force = serializers.BooleanField(required=False, default=False)
 
 class CompleteResponseSerializer(serializers.Serializer):
+    """Response body for `/complete/`."""
     batch_id = serializers.IntegerField()
     batch_status = serializers.ChoiceField(choices=BatchStatus.choices)
 
@@ -75,7 +106,12 @@ class BatchOpsMixin:
       - cull: reduce remaining quantity on batch
       - complete: close batch when no remaining quantity (or force)
       - archive: soft-delete the batch and revoke labels
+
     All actions write Events to maintain derived availability where appropriate.
+
+    Concurrency / Idempotency:
+        - `require_if_match()` validates `If-Match` when provided.
+        - `@idempotent` replays first success for identical input.
     """
 
     @extend_schema(
@@ -96,6 +132,7 @@ class BatchOpsMixin:
     @action(detail=True, methods=["post"], url_path="harvest")
     @idempotent
     def harvest(self, request: Request, pk: str | None = None) -> Response:
+        """Promote units from batch to a Plant; returns IDs and updated availability."""
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -177,6 +214,7 @@ class BatchOpsMixin:
     @action(detail=True, methods=["post"], url_path="cull")
     @idempotent
     def cull(self, request: Request, pk: str | None = None) -> Response:
+        """Reduce available quantity by `quantity`; records a negative Event."""
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -230,6 +268,7 @@ class BatchOpsMixin:
     @action(detail=True, methods=["post"], url_path="complete")
     @idempotent
     def complete(self, request: Request, pk: str | None = None) -> Response:
+        """Set batch status to COMPLETED (with optional `force`)."""
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 
@@ -257,6 +296,7 @@ class BatchOpsMixin:
     # -------- Archive (soft-delete) -------------------------------------------
 
     class _ArchiveResponse(serializers.Serializer):
+        """Response body for `/archive/`."""
         id = serializers.IntegerField()
         archived = serializers.BooleanField()
         deleted_at = serializers.DateTimeField()
@@ -282,6 +322,7 @@ class BatchOpsMixin:
     @action(detail=True, methods=["post"], url_path="archive")
     @idempotent
     def archive(self, request: Request, pk: str | None = None) -> Response:
+        """Soft-delete the batch and revoke its active label token, if any."""
         batch: PropagationBatch = self.get_object()
         require_if_match(request, batch.updated_at)
 

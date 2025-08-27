@@ -1,3 +1,20 @@
+"""
+Production settings (extends base) with secure defaults.
+
+Highlights
+----------
+- DEBUG=False, SECRET_KEY required from the environment.
+- Hosts/CSRF origin lists must be explicit.
+- Database must be provided via `DATABASE_URL` (no SQLite fallback).
+- HTTPS enforced, secure cookies, HSTS, and conservative security headers.
+
+Operational notes
+-----------------
+- `SECURE_PROXY_SSL_HEADER` is set for deployments behind a TLS-terminating proxy.
+- Logging emits concise console lines for requests and security events; extend
+  handlers as needed for your platform (e.g., JSON logs to stdout).
+"""
+
 from .base import *
 
 # ----------------------------------------------------------------------
