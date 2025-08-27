@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.conf import settings
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -77,8 +78,14 @@ class EventsExportView(APIView):
         )
 
         if fmt == "json":
-            data = serialize_events_to_json(queryset, request)
-            return Response(data)
+            limit = int(getattr(settings, "EXPORT_MAX_ROWS", 100_000))
+            total = queryset.count()
+            data = serialize_events_to_json(queryset[:limit], request)
+            resp = Response(data)
+            resp["X-Export-Total"] = str(total)
+            resp["X-Export-Limit"] = str(limit)
+            resp["X-Export-Truncated"] = "true" if total > limit else "false"
+            return resp
 
         # Default to CSV for fmt in {"", "csv", anything-else}
         return render_events_to_csv(queryset)

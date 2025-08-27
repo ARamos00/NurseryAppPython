@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
-from typing import Iterable, List, Dict
+from typing import Iterable, List, Dict, Optional
 
+from django.conf import settings
 from django.http import HttpResponse
 from django.utils import timezone
 
@@ -30,16 +31,25 @@ def serialize_events_to_json(queryset, request) -> List[Dict]:
     return EventSerializer(queryset, many=True, context={"request": request}).data  # type: ignore[no-any-return]
 
 
-def render_events_to_csv(queryset) -> HttpResponse:
+def render_events_to_csv(queryset, *, limit: Optional[int] = None) -> HttpResponse:
     """
     Render the given queryset (already owner-scoped and filtered) as a CSV download.
+    Adds X-Export-* headers for observability. Does not alter CSV shape.
     """
+    if limit is None:
+        limit = int(getattr(settings, "EXPORT_MAX_ROWS", 100_000))
+
+    total = queryset.count()
+
     buf = StringIO()
     writer = csv.DictWriter(buf, fieldnames=CSV_HEADERS)
     writer.writeheader()
 
     def rows(qs) -> Iterable[dict]:
+        written = 0
         for e in qs.iterator():
+            if limit and written >= limit:
+                break
             yield {
                 "id": e.id,
                 "happened_at": e.happened_at.isoformat(),
@@ -50,6 +60,7 @@ def render_events_to_csv(queryset) -> HttpResponse:
                 "quantity_delta": e.quantity_delta if e.quantity_delta is not None else "",
                 "notes": (e.notes or "").replace("\r", " ").replace("\n", " ").strip(),
             }
+            written += 1
 
     for row in rows(queryset):
         writer.writerow(row)
@@ -58,4 +69,7 @@ def render_events_to_csv(queryset) -> HttpResponse:
     content = buf.getvalue()
     resp = HttpResponse(content, content_type="text/csv; charset=utf-8")
     resp["Content-Disposition"] = f'attachment; filename="events-{ts}.csv"'
+    resp["X-Export-Total"] = str(total)
+    resp["X-Export-Limit"] = str(limit)
+    resp["X-Export-Truncated"] = "true" if (limit and total > limit) else "false"
     return resp

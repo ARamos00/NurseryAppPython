@@ -48,6 +48,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    # Reject large requests before parsing
+    "core.middleware.RequestSizeLimitMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -175,8 +177,15 @@ SPECTACULAR_SETTINGS = {
 # Concurrency strictness toggle
 ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
 
-# NEW: Import size cap (bytes)
+# --- Size/Limits ---------------------------------------------------------------
+# Max body size for unsafe methods (bytes)
+MAX_REQUEST_BYTES = env.int("MAX_REQUEST_BYTES", default=2_000_000)
+# Max bytes for import files
 MAX_IMPORT_BYTES = env.int("MAX_IMPORT_BYTES", default=5_000_000)
+# Max CSV rows accepted in a single import (data rows, not counting header)
+IMPORT_MAX_ROWS = env.int("IMPORT_MAX_ROWS", default=50000)
+# Max rows emitted by an export (applies to JSON and CSV)
+EXPORT_MAX_ROWS = env.int("EXPORT_MAX_ROWS", default=100000)
 
 # ---------------------------------------------------------------------
 # Security defaults (safe baseline; prod hardening in prod.py)

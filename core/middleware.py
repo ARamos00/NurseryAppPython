@@ -4,9 +4,12 @@ import logging
 import re
 import time
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
+from django.conf import settings
 from django.http import HttpRequest, HttpResponse
+from rest_framework.response import Response  # DRF Response so APIClient exposes .data
+from rest_framework.renderers import JSONRenderer  # To render Response content for tests
 
 # Keep the contextvar in a small logging helper module so all loggers can access it.
 from .logging import request_id_var  # noqa: F401  (imported for side effects / reference)
@@ -25,6 +28,46 @@ def _coerce_request_id(raw: str | None) -> str:
         return raw
     # uuid4 hex (no hyphens) to keep it compact and URL/header safe
     return uuid.uuid4().hex
+
+
+class RequestSizeLimitMiddleware:
+    """
+    Reject overly large request bodies with 413, before any parsing.
+
+    - Uses Content-Length if present; if missing or unparsable we allow through.
+    - Applies to POST/PUT/PATCH only.
+    - Configured via settings.MAX_REQUEST_BYTES (default: 2_000_000).
+    - Returns a DRF Response (pre-rendered) so APIClient exposes .data and .content.
+    """
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+        self.max_bytes: int = int(getattr(settings, "MAX_REQUEST_BYTES", 2_000_000))
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        method = request.method.upper()
+        if method in {"POST", "PUT", "PATCH"} and self.max_bytes > 0:
+            raw_len: Optional[str] = request.META.get("CONTENT_LENGTH")
+            try:
+                content_length = int(raw_len) if raw_len is not None else None
+            except ValueError:
+                content_length = None
+
+            if content_length is not None and content_length > self.max_bytes:
+                # Build a DRF Response and render it so tests can access r.content and r.data
+                payload = {
+                    "detail": f"Request entity too large. Max {self.max_bytes} bytes.",
+                    "code": "request_too_large",
+                    "max_bytes": self.max_bytes,
+                }
+                resp = Response(payload, status=413)
+                resp.accepted_renderer = JSONRenderer()
+                resp.accepted_media_type = "application/json"
+                resp.renderer_context = {}
+                resp.render()  # ensure .content is available
+                return resp
+
+        return self.get_response(request)
 
 
 class RequestIDLogMiddleware:

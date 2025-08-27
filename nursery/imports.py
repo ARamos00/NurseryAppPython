@@ -64,6 +64,17 @@ def _open_csv(upload: UploadedFile) -> Iterable[Dict[str, str]]:
         yield row
 
 
+def _row_cap_exceeded(idx: int) -> bool:
+    """
+    True if data row index (starting at 2 = first data row) exceeds IMPORT_MAX_ROWS.
+    """
+    max_rows = int(getattr(settings, "IMPORT_MAX_ROWS", 50_000))  # data rows
+    if max_rows <= 0:
+        return False
+    # idx=2 => first data row -> count=1; exceed when (idx-1) > max_rows
+    return (idx - 1) > max_rows
+
+
 # ---------------------------------------------------------------------------
 # Normalization & validation helpers
 # ---------------------------------------------------------------------------
@@ -140,7 +151,9 @@ def import_taxa(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> 
 
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):  # header is line 1
-            # Required column check (per-row — preserves streaming)
+            if _row_cap_exceeded(idx):
+                break
+
             missing = _require_fields(row, REQUIRED)
             if missing:
                 failed += 1
@@ -177,6 +190,9 @@ def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False
 
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):
+            if _row_cap_exceeded(idx):
+                break
+
             missing = _require_fields(row, REQUIRED)
             if missing:
                 failed += 1
@@ -235,6 +251,9 @@ def import_plants(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -
 
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):
+            if _row_cap_exceeded(idx):
+                break
+
             missing = _require_fields(row, REQUIRED)
             if missing:
                 failed += 1

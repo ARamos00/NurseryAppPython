@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema  # noqa: E241
 
 from core.utils.idempotency import idempotent
 from nursery.imports import _open_csv, import_materials, import_plants, import_taxa
@@ -67,7 +67,9 @@ class TaxaImportView(BaseImportView):
         try:
             rows = list(_open_csv(upload))
         except ValueError as e:
-            return Response({"file": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
+            msg = str(e)
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "File too large" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"file": [msg]}, status=status_code)
         result = import_taxa(request.user, rows, dry_run=self._dry_run(request))
         return Response(_summary_payload(result))
 
@@ -96,7 +98,9 @@ class MaterialsImportView(BaseImportView):
         try:
             rows = list(_open_csv(upload))
         except ValueError as e:
-            return Response({"file": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
+            msg = str(e)
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "File too large" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"file": [msg]}, status=status_code)
         result = import_materials(request.user, rows, dry_run=self._dry_run(request))
         return Response(_summary_payload(result))
 
@@ -125,6 +129,8 @@ class PlantsImportView(BaseImportView):
         try:
             rows = list(_open_csv(upload))
         except ValueError as e:
-            return Response({"file": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
+            msg = str(e)
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "File too large" in msg else status.HTTP_400_BAD_REQUEST
+            return Response({"file": [msg]}, status=status_code)
         result = import_plants(request.user, rows, dry_run=self._dry_run(request))
         return Response(_summary_payload(result))
