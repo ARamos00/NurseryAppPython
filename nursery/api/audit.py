@@ -8,8 +8,12 @@ from django.utils.timezone import is_naive, make_aware
 from rest_framework import permissions, serializers, viewsets
 from rest_framework.request import Request
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+
 from nursery.models import AuditLog, AuditAction
 from nursery.serializers import AuditLogSerializer
+from nursery.schema import ERROR_RESPONSE
 
 
 class AuditLogWithModelSerializer(AuditLogSerializer):
@@ -26,6 +30,19 @@ class AuditLogWithModelSerializer(AuditLogSerializer):
         fields = AuditLogSerializer.Meta.fields + ["model"]
 
 
+@extend_schema(
+    tags=["Audit"],
+    parameters=[
+        OpenApiParameter(name="model", type=OpenApiTypes.STR, required=False, description='e.g. "plant" or "nursery.plant"'),
+        OpenApiParameter(name="object_id", type=OpenApiTypes.INT, required=False),
+        OpenApiParameter(name="action", type=OpenApiTypes.STR, required=False, description="create|update|delete"),
+        OpenApiParameter(name="date_from", type=OpenApiTypes.DATETIME, required=False),
+        OpenApiParameter(name="date_to", type=OpenApiTypes.DATETIME, required=False),
+        OpenApiParameter(name="user_id", type=OpenApiTypes.INT, required=False, description="Staff only"),
+    ],
+    responses={200: OpenApiResponse(description="Paginated audit logs"), 400: ERROR_RESPONSE},
+    description="Read-only audit logs, owner-scoped for non-staff users.",
+)
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only audit logs, owner-scoped for non-staff users.

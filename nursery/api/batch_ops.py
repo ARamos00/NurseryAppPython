@@ -10,7 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from core.utils.concurrency import compute_etag, require_if_match
 from core.utils.idempotency import idempotent
@@ -23,6 +23,14 @@ from nursery.models import (
     EventType,
     Label,
     LabelToken,
+)
+# Shared OpenAPI components
+from nursery.schema import (
+    IF_MATCH_HEADER,
+    IDEMPOTENCY_KEY_HEADER,
+    IDEMPOTENCY_EXAMPLE,
+    VALIDATION_ERROR_RESPONSE,
+    ERROR_RESPONSE,
 )
 
 # ---------- Serializer definitions (local to ops) ----------
@@ -57,13 +65,6 @@ class CompleteResponseSerializer(serializers.Serializer):
     batch_id = serializers.IntegerField()
     batch_status = serializers.ChoiceField(choices=BatchStatus.choices)
 
-IF_MATCH_PARAM = OpenApiParameter(
-    name="If-Match",
-    type=str,
-    location=OpenApiParameter.HEADER,
-    required=False,
-    description='Optimistic concurrency: send the ETag from the last GET to avoid lost updates.',
-)
 
 # ---------- Mixin with actions ----------
 
@@ -79,9 +80,14 @@ class BatchOpsMixin:
 
     @extend_schema(
         tags=["Batches: Ops"],
-        parameters=[IF_MATCH_PARAM],
+        parameters=[IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER],
         request=HarvestRequestSerializer,
-        responses={201: HarvestResponseSerializer},
+        responses={
+            201: HarvestResponseSerializer,
+            400: VALIDATION_ERROR_RESPONSE,
+            412: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description=(
             "Move quantity from the batch into a new Plant record. "
             "Writes a negative `quantity_delta` Event on the batch and a positive Event on the plant."
@@ -155,9 +161,14 @@ class BatchOpsMixin:
 
     @extend_schema(
         tags=["Batches: Ops"],
-        parameters=[IF_MATCH_PARAM],
+        parameters=[IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER],
         request=CullRequestSerializer,
-        responses={200: CullResponseSerializer},
+        responses={
+            200: CullResponseSerializer,
+            400: VALIDATION_ERROR_RESPONSE,
+            412: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description=(
             "Reduce remaining batch quantity (losses/discards). "
             "Writes a negative `quantity_delta` Event on the batch."
@@ -206,9 +217,14 @@ class BatchOpsMixin:
 
     @extend_schema(
         tags=["Batches: Ops"],
-        parameters=[IF_MATCH_PARAM],
+        parameters=[IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER],
         request=CompleteRequestSerializer,
-        responses={200: CompleteResponseSerializer},
+        responses={
+            200: CompleteResponseSerializer,
+            400: VALIDATION_ERROR_RESPONSE,
+            412: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Mark a batch as COMPLETED. Requires zero remaining quantity unless `force=true`.",
     )
     @action(detail=True, methods=["post"], url_path="complete")
@@ -251,8 +267,12 @@ class BatchOpsMixin:
 
     @extend_schema(
         tags=["Batches: Ops"],
-        parameters=[IF_MATCH_PARAM],
-        responses={200: _ArchiveResponse},
+        parameters=[IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER],
+        responses={
+            200: _ArchiveResponse,
+            412: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description=(
             "Soft-delete (archive) this batch. Sets is_deleted=true and deleted_at now. "
             "Revokes any active label token so the public page stops resolving. "

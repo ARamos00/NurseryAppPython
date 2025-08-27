@@ -10,7 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from core.utils.concurrency import require_if_match
 from core.utils.idempotency import idempotent
@@ -21,6 +21,14 @@ from nursery.models import (
     EventType,
     Label,
     LabelToken,
+)
+# Shared OpenAPI components
+from nursery.schema import (
+    IDEMPOTENCY_KEY_HEADER,
+    IDEMPOTENCY_EXAMPLE,
+    IF_MATCH_HEADER,
+    VALIDATION_ERROR_RESPONSE,
+    ERROR_RESPONSE,
 )
 
 # -----------------------------------------------------------------------------
@@ -54,15 +62,6 @@ STATUS_TO_EVENT = {
     PlantStatus.DEAD: EventType.DISCARD,
 }
 
-# Common OpenAPI header param for concurrency
-IF_MATCH_PARAM = OpenApiParameter(
-    name="If-Match",
-    type=str,
-    required=False,
-    location=OpenApiParameter.HEADER,
-    description="Optimistic concurrency: send the ETag from the last GET to avoid lost updates.",
-)
-
 
 class PlantOpsMixin:
     """
@@ -73,8 +72,13 @@ class PlantOpsMixin:
 
     @extend_schema(
         tags=["Plants: Ops"],
+        parameters=[IDEMPOTENCY_KEY_HEADER],
         request=BulkStatusRequestSerializer,
-        responses={200: BulkStatusResponseSerializer},
+        responses={
+            200: BulkStatusResponseSerializer,
+            400: VALIDATION_ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description=(
             "Bulk update plant statuses. Creates a corresponding Event per plant "
             "(SELL/DISCARD for terminal states; NOTE otherwise). Idempotent per body."
@@ -140,8 +144,11 @@ class PlantOpsMixin:
 
     @extend_schema(
         tags=["Plants: Ops"],
-        parameters=[IF_MATCH_PARAM],
-        responses={200: _ArchiveResponse},
+        parameters=[IF_MATCH_HEADER],
+        responses={
+            200: _ArchiveResponse,
+            412: ERROR_RESPONSE,  # stale If-Match
+        },
         description=(
             "Soft-delete (archive) this plant. Sets is_deleted=true and deleted_at now. "
             "Revokes any active label token so the public page stops resolving. "

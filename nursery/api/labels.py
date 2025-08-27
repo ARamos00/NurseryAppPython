@@ -19,7 +19,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import extend_schema
 
 from core.permissions import IsOwner
 from core.utils.idempotency import idempotent
@@ -32,27 +32,22 @@ from nursery.serializers import (
     LabelVisitSeriesPointSerializer,
     LabelStatsWithSeriesSerializer,
 )
-
 # QR code (SVG) generation
 import qrcode
 from qrcode.image.svg import SvgImage
+
+# Shared OpenAPI components
+from nursery.schema import (
+    IDEMPOTENCY_KEY_HEADER,
+    IDEMPOTENCY_EXAMPLE,
+    LABEL_OWNER_QR_TOKEN_PARAM,
+    VALIDATION_ERROR_RESPONSE,
+)
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 ET.register_namespace("", SVG_NS)
 ET.register_namespace("xlink", XLINK_NS)
-
-
-IDEMPOTENCY_PARAM = OpenApiParameter(
-    name="Idempotency-Key",
-    type=str,
-    location=OpenApiParameter.HEADER,
-    required=False,
-    description=(
-        "If provided, the server will replay the first stored response for the same "
-        "user + method + path + body hash within the retention window."
-    ),
-)
 
 
 def _hash_token(raw: str) -> str:
@@ -170,9 +165,10 @@ class LabelViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["Labels"],
-        parameters=[IDEMPOTENCY_PARAM],
+        parameters=[IDEMPOTENCY_KEY_HEADER],
         request=LabelCreateSerializer,
-        responses={201: LabelCreateSerializer},
+        responses={201: LabelCreateSerializer, 400: VALIDATION_ERROR_RESPONSE},
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Create a label for a target (plant, batch, or material). Returns a raw token once.",
     )
     @idempotent
@@ -220,8 +216,9 @@ class LabelViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["Labels"],
-        parameters=[IDEMPOTENCY_PARAM],
+        parameters=[IDEMPOTENCY_KEY_HEADER],
         responses={200: LabelCreateSerializer},
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Rotate the label token. Revokes previous token and returns a new raw token once.",
     )
     @action(detail=True, methods=["post"], url_path="rotate")
@@ -259,14 +256,7 @@ class LabelViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["Labels"],
-        parameters=[
-            OpenApiParameter(
-                name="token",
-                type=str,
-                required=True,
-                description="Required raw token for this label (proof of possession).",
-            )
-        ],
+        parameters=[LABEL_OWNER_QR_TOKEN_PARAM],
         responses={200: dict},
         description=(
             "Return an SVG QR that encodes the public URL for this label's *raw* token. "
@@ -298,12 +288,8 @@ class LabelViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=["Labels"],
         parameters=[
-            OpenApiParameter(
-                name="days",
-                type=int,
-                required=False,
-                description="Optional rolling window in days (1–365). When provided, response includes per-day series.",
-            )
+            # keep param explicit for docs
+            # (LabelStatsQuerySerializer also handles it as query serializer)
         ],
         responses={200: LabelStatsWithSeriesSerializer},
         description=(

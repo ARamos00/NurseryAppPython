@@ -5,6 +5,8 @@ from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from drf_spectacular.utils import extend_schema_view, extend_schema
+
 from core.permissions import IsOwner
 from nursery.models import (
     Taxon,
@@ -89,6 +91,13 @@ class OwnedModelViewSet(ETagConcurrencyMixin, viewsets.ModelViewSet):
         super().perform_destroy(instance)
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Taxa"], description="List taxa (owner scoped)."),
+    retrieve=extend_schema(tags=["Taxa"], description="Retrieve a single taxon."),
+    create=extend_schema(tags=["Taxa"], description="Create a taxon."),
+    update=extend_schema(tags=["Taxa"], description="Update a taxon."),
+    partial_update=extend_schema(tags=["Taxa"], description="Partial update a taxon."),
+)
 class TaxonViewSet(OwnedModelViewSet):
     lookup_value_regex = r"\d+"
     queryset = Taxon.objects.all()
@@ -99,6 +108,13 @@ class TaxonViewSet(OwnedModelViewSet):
     ordering = ["scientific_name", "cultivar"]
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Materials"], description="List plant materials."),
+    retrieve=extend_schema(tags=["Materials"], description="Retrieve a plant material."),
+    create=extend_schema(tags=["Materials"], description="Create a plant material."),
+    update=extend_schema(tags=["Materials"], description="Update a plant material."),
+    partial_update=extend_schema(tags=["Materials"], description="Partial update a plant material."),
+)
 class PlantMaterialViewSet(OwnedModelViewSet):
     lookup_value_regex = r"\d+"
     queryset = PlantMaterial.objects.select_related("taxon").all()
@@ -109,6 +125,13 @@ class PlantMaterialViewSet(OwnedModelViewSet):
     ordering = ["-created_at"]
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Batches"], description="List propagation batches."),
+    retrieve=extend_schema(tags=["Batches"], description="Retrieve a propagation batch."),
+    create=extend_schema(tags=["Batches"], description="Create a propagation batch."),
+    update=extend_schema(tags=["Batches"], description="Update a propagation batch."),
+    partial_update=extend_schema(tags=["Batches"], description="Partial update a propagation batch."),
+)
 class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
     lookup_value_regex = r"\d+"
     queryset = PropagationBatch.objects.select_related("material", "material__taxon").all()
@@ -129,6 +152,13 @@ class PropagationBatchViewSet(BatchOpsMixin, OwnedModelViewSet):
                         status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Plants"], description="List plants."),
+    retrieve=extend_schema(tags=["Plants"], description="Retrieve a plant."),
+    create=extend_schema(tags=["Plants"], description="Create a plant."),
+    update=extend_schema(tags=["Plants"], description="Update a plant."),
+    partial_update=extend_schema(tags=["Plants"], description="Partial update a plant."),
+)
 class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
     lookup_value_regex = r"\d+"
     queryset = Plant.objects.select_related("taxon", "batch").all()
@@ -144,6 +174,13 @@ class PlantViewSet(PlantOpsMixin, OwnedModelViewSet):
                         status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Events"], description="List events (plant or batch)."),
+    retrieve=extend_schema(tags=["Events"], description="Retrieve an event."),
+    create=extend_schema(tags=["Events"], description="Create an event."),
+    update=extend_schema(tags=["Events"], description="Update an event."),
+    partial_update=extend_schema(tags=["Events"], description="Partial update an event."),
+)
 class EventViewSet(OwnedModelViewSet):
     lookup_value_regex = r"\d+"
     queryset = Event.objects.select_related("batch", "plant").all()

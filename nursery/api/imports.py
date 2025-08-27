@@ -13,6 +13,8 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 
 from core.utils.idempotency import idempotent
 from nursery.imports import _open_csv, import_materials, import_plants, import_taxa
+# Shared OpenAPI components
+from nursery.schema import IDEMPOTENCY_KEY_HEADER, IDEMPOTENCY_EXAMPLE, VALIDATION_ERROR_RESPONSE, ERROR_RESPONSE
 
 
 def _summary_payload(result) -> Dict[str, Any]:
@@ -55,8 +57,14 @@ class TaxaImportView(BaseImportView):
         },
         parameters=[
             OpenApiParameter(name="dry_run", type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY, required=False),
+            IDEMPOTENCY_KEY_HEADER,
         ],
-        responses={200: OpenApiResponse(description="Import summary JSON")},
+        responses={
+            200: OpenApiResponse(description="Import summary JSON"),
+            400: VALIDATION_ERROR_RESPONSE,
+            413: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Import taxa via CSV with headers: scientific_name,cultivar,clone_code",
     )
     @idempotent
@@ -86,8 +94,14 @@ class MaterialsImportView(BaseImportView):
         },
         parameters=[
             OpenApiParameter(name="dry_run", type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY, required=False),
+            IDEMPOTENCY_KEY_HEADER,
         ],
-        responses={200: OpenApiResponse(description="Import summary JSON")},
+        responses={
+            200: OpenApiResponse(description="Import summary JSON"),
+            400: VALIDATION_ERROR_RESPONSE,
+            413: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Import materials via CSV with headers: taxon_id,material_type,lot_code,notes",
     )
     @idempotent
@@ -117,8 +131,14 @@ class PlantsImportView(BaseImportView):
         },
         parameters=[
             OpenApiParameter(name="dry_run", type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY, required=False),
+            IDEMPOTENCY_KEY_HEADER,
         ],
-        responses={200: OpenApiResponse(description="Import summary JSON")},
+        responses={
+            200: OpenApiResponse(description="Import summary JSON"),
+            400: VALIDATION_ERROR_RESPONSE,
+            413: ERROR_RESPONSE,
+        },
+        examples=[IDEMPOTENCY_EXAMPLE],
         description="Import plants via CSV with headers: taxon_id,batch_id,status,quantity,acquired_on,notes",
     )
     @idempotent
