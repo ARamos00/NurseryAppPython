@@ -53,6 +53,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Observability: request-id + structured request log (one line per request)
+    "core.middleware.RequestIDLogMiddleware",
 ]
 
 ROOT_URLCONF = "nursery_tracker.urls"
@@ -201,3 +203,39 @@ WEBHOOKS_SIGNATURE_HEADER = env("WEBHOOKS_SIGNATURE_HEADER", default="X-Webhook-
 WEBHOOKS_USER_AGENT = env("WEBHOOKS_USER_AGENT", default="NurseryTracker/0.1")
 # Turn on automatic emits later (e.g., from signals) without altering code.
 WEBHOOKS_ENABLE_AUTO_EMIT = env.bool("WEBHOOKS_ENABLE_AUTO_EMIT", default=False)
+
+# ---------------------------------------------------------------------
+# Logging (observability)
+# ---------------------------------------------------------------------
+# Minimal, structured console logging for request lines. The RequestIDFilter
+# injects `request_id` even for logs outside HTTP contexts.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {"()": "core.logging.RequestIDFilter"},
+    },
+    "formatters": {
+        # Simple structured formatter; extend as needed in prod.py
+        "structured": {
+            "format": "level=%(levelname)s logger=%(name)s request_id=%(request_id)s "
+                      "method=%(method)s path=%(path)s status=%(status)s user_id=%(user_id)s duration_ms=%(duration_ms)s "
+                      "message=%(message)s"
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "filters": ["request_id"],
+            "formatter": "structured",
+        },
+    },
+    "loggers": {
+        # The middleware logs one line per request to this logger.
+        "nursery.request": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
