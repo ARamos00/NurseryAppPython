@@ -187,6 +187,19 @@ IMPORT_MAX_ROWS = env.int("IMPORT_MAX_ROWS", default=50000)
 # Max rows emitted by an export (applies to JSON and CSV)
 EXPORT_MAX_ROWS = env.int("EXPORT_MAX_ROWS", default=100000)
 
+# --- Webhooks ------------------------------------------------------------------
+# Require HTTPS for webhook endpoints unless explicitly disabled for local dev.
+WEBHOOKS_REQUIRE_HTTPS = env.bool("WEBHOOKS_REQUIRE_HTTPS", default=not DEBUG)
+WEBHOOKS_SIGNATURE_HEADER = env("WEBHOOKS_SIGNATURE_HEADER", default="X-Webhook-Signature")
+WEBHOOKS_USER_AGENT = env("WEBHOOKS_USER_AGENT", default="NurseryTracker/0.1")
+WEBHOOKS_ENABLE_AUTO_EMIT = env.bool("WEBHOOKS_ENABLE_AUTO_EMIT", default=False)
+# Delivery controls (feature-flag friendly)
+WEBHOOKS_DELIVERY_ENABLED = env.bool("WEBHOOKS_DELIVERY_ENABLED", default=True)
+# Comma-separated seconds or leave default
+WEBHOOKS_BACKOFF_SCHEDULE = env("WEBHOOKS_BACKOFF_SCHEDULE", default="60,300,1800,7200,86400")
+WEBHOOKS_MAX_ATTEMPTS = env.int("WEBHOOKS_MAX_ATTEMPTS", default=5)
+WEBHOOKS_DELIVERY_TIMEOUT_SEC = env.int("WEBHOOKS_DELIVERY_TIMEOUT_SEC", default=15)
+
 # ---------------------------------------------------------------------
 # Security defaults (safe baseline; prod hardening in prod.py)
 # ---------------------------------------------------------------------
@@ -204,14 +217,6 @@ AUTH_USER_MODEL = "accounts.User"
 # ---------------------------------------------------------------------
 # When True, PATCH/PUT/DELETE require `If-Match` and return 428 if missing.
 ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
-
-# --- Webhooks ------------------------------------------------------------------
-# Require HTTPS for webhook endpoints unless explicitly disabled for local dev.
-WEBHOOKS_REQUIRE_HTTPS = env.bool("WEBHOOKS_REQUIRE_HTTPS", default=not DEBUG)
-WEBHOOKS_SIGNATURE_HEADER = env("WEBHOOKS_SIGNATURE_HEADER", default="X-Webhook-Signature")
-WEBHOOKS_USER_AGENT = env("WEBHOOKS_USER_AGENT", default="NurseryTracker/0.1")
-# Turn on automatic emits later (e.g., from signals) without altering code.
-WEBHOOKS_ENABLE_AUTO_EMIT = env.bool("WEBHOOKS_ENABLE_AUTO_EMIT", default=False)
 
 # ---------------------------------------------------------------------
 # Logging (observability)

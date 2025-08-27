@@ -4,27 +4,42 @@ import json
 import hmac
 import hashlib
 import time
+from typing import List
 from urllib import request as urlrequest
 from urllib.error import URLError, HTTPError
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.db.models import Q  # <-- FIX: bring in Q
+from django.db.models import Q
 from django.utils import timezone
 
 from nursery.models import WebhookDelivery, WebhookDeliveryStatus
 
 
-BACKOFF_SECONDS = [60, 300, 1800, 7200, 86400]  # 1m, 5m, 30m, 2h, 24h
-SIG_HEADER = getattr(settings, "WEBHOOKS_SIGNATURE_HEADER", "X-Webhook-Signature")
-USER_AGENT = getattr(settings, "WEBHOOKS_USER_AGENT", "NurseryTracker/0.1")
-
-
 def _sign(secret: str, body_bytes: bytes) -> str:
     mac = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
-    # include algorithm prefix for clarity
     return f"sha256={mac}"
+
+
+def _parse_backoff_schedule(cfg) -> List[int]:
+    """
+    Accept either a comma-separated string or a list/tuple of ints.
+    """
+    if isinstance(cfg, str):
+        parts = [p.strip() for p in cfg.split(",") if p.strip()]
+        out: List[int] = []
+        for p in parts:
+            try:
+                out.append(int(p))
+            except ValueError:
+                continue
+        return out or [60, 300, 1800, 7200, 86400]
+    if isinstance(cfg, (list, tuple)):
+        try:
+            return [int(x) for x in cfg] or [60, 300, 1800, 7200, 86400]
+        except Exception:
+            return [60, 300, 1800, 7200, 86400]
+    return [60, 300, 1800, 7200, 86400]
 
 
 class Command(BaseCommand):
@@ -34,6 +49,10 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=50, help="Maximum deliveries to process this run")
 
     def handle(self, *args, **opts):
+        if not getattr(settings, "WEBHOOKS_DELIVERY_ENABLED", True):
+            self.stdout.write(self.style.WARNING("Delivery disabled (WEBHOOKS_DELIVERY_ENABLED=False). Exiting."))
+            return
+
         limit = int(opts["limit"])
         now = timezone.now()
 
@@ -41,7 +60,7 @@ class Command(BaseCommand):
             WebhookDelivery.objects
             .select_related("endpoint")
             .filter(status=WebhookDeliveryStatus.QUEUED)
-            .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))  # <-- use Q
+            .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
             .order_by("created_at")[:limit]
         )
 
@@ -59,15 +78,16 @@ class Command(BaseCommand):
 
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": USER_AGENT,
-            SIG_HEADER: signature,
+            "User-Agent": getattr(settings, "WEBHOOKS_USER_AGENT", "NurseryTracker/0.1"),
+            getattr(settings, "WEBHOOKS_SIGNATURE_HEADER", "X-Webhook-Signature"): signature,
         }
 
         req = urlrequest.Request(ep.url, data=body, headers=headers, method="POST")
 
         started = time.perf_counter()
         try:
-            with urlrequest.urlopen(req, timeout=15) as resp:
+            timeout_sec = int(getattr(settings, "WEBHOOKS_DELIVERY_TIMEOUT_SEC", 15))
+            with urlrequest.urlopen(req, timeout=timeout_sec) as resp:
                 resp_body = resp.read()
                 status_code = resp.getcode()
                 resp_headers = dict(resp.getheaders())
@@ -103,10 +123,22 @@ class Command(BaseCommand):
             ])
 
     def _schedule_retry(self, d: WebhookDelivery, reason: str):
-        d.status = WebhookDeliveryStatus.FAILED  # may be changed to QUEUED below
+        """
+        Decide whether to retry later or park in DLQ (FAILED).
+        """
+        d.status = WebhookDeliveryStatus.FAILED  # updated to QUEUED if we will retry
         d.last_error = reason
-        # compute next backoff
-        if d.attempt_count <= len(BACKOFF_SECONDS):
-            delay = BACKOFF_SECONDS[d.attempt_count - 1]
-            d.next_attempt_at = timezone.now() + timezone.timedelta(seconds=delay)
-            d.status = WebhookDeliveryStatus.QUEUED
+
+        schedule = _parse_backoff_schedule(getattr(settings, "WEBHOOKS_BACKOFF_SCHEDULE", "60,300,1800,7200,86400"))
+        max_attempts = int(getattr(settings, "WEBHOOKS_MAX_ATTEMPTS", len(schedule)))
+
+        # If we've already reached/exceeded max attempts, park in DLQ
+        if d.attempt_count >= max_attempts:
+            d.next_attempt_at = None
+            return
+
+        # attempt_count is 1-based; pick corresponding delay if available, else last
+        idx = min(d.attempt_count, len(schedule)) - 1
+        delay = schedule[idx]
+        d.next_attempt_at = timezone.now() + timezone.timedelta(seconds=delay)
+        d.status = WebhookDeliveryStatus.QUEUED
