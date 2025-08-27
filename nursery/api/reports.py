@@ -4,7 +4,7 @@ import csv
 from io import StringIO
 from typing import Any, Dict, Iterable, List
 
-from django.db.models import Count, Sum, QuerySet
+from django.db.models import Count, Sum, QuerySet, Q
 from django.db.models.functions import TruncDate, TruncWeek, TruncMonth
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import make_aware, is_naive
@@ -134,7 +134,9 @@ class InventoryReportView(BaseReportView):
             resp["Content-Disposition"] = 'attachment; filename="inventory.csv"'
             return resp
 
-        return Response({"rows": rows, "totals": totals})
+        # Preserve existing top-level "totals" for backward compatibility,
+        # and also expose meta.totals for forward-looking clients.
+        return Response({"rows": rows, "totals": totals, "meta": {"totals": totals}})
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +155,24 @@ class InventoryReportView(BaseReportView):
             required=False,
             description="Optional timeseries bucket: day | week | month",
         ),
+        OpenApiParameter(
+            name="event_type",
+            type=OpenApiTypes.STR,
+            required=False,
+            description="Filter by event_type (e.g., SOW, SELL, NOTE, ...)",
+        ),
+        OpenApiParameter(
+            name="target",
+            type=OpenApiTypes.STR,
+            required=False,
+            description="Filter by target type: 'plant' or 'batch'",
+        ),
+        OpenApiParameter(
+            name="taxon",
+            type=OpenApiTypes.INT,
+            required=False,
+            description="Filter by taxon id (applies to plant events and batch events via material.taxon)",
+        ),
     ],
     responses={200: OpenApiResponse(description="Production (events) report")},
     description="Production summary aggregated by event type, with optional time-bucketed series.",
@@ -162,12 +182,33 @@ class ProductionReportView(BaseReportView):
         fmt = _fmt_param(request)
         qs = self._events(request)
 
+        # datetime window
         d_from = _parse_dt_param(request.query_params.get("date_from"))
         d_to = _parse_dt_param(request.query_params.get("date_to"))
         if d_from:
             qs = qs.filter(happened_at__gte=d_from)
         if d_to:
             qs = qs.filter(happened_at__lte=d_to)
+
+        # extra filters
+        event_type = (request.query_params.get("event_type") or "").strip()
+        if event_type:
+            qs = qs.filter(event_type=event_type)
+
+        target = (request.query_params.get("target") or "").strip().lower()
+        if target == "plant":
+            qs = qs.filter(plant__isnull=False)
+        elif target == "batch":
+            qs = qs.filter(batch__isnull=False)
+
+        taxon_id_raw = request.query_params.get("taxon")
+        if taxon_id_raw:
+            try:
+                taxon_id = int(taxon_id_raw)
+            except ValueError:
+                return Response({"taxon": ["Invalid id."]}, status=status.HTTP_400_BAD_REQUEST)
+            # Match plant events OR batch events joined via material.taxon
+            qs = qs.filter(Q(plant__taxon_id=taxon_id) | Q(batch__material__taxon_id=taxon_id))
 
         # overall by event_type
         by_type = qs.values("event_type").annotate(events=Count("id"), qty=Sum("quantity_delta")).order_by("event_type")
@@ -204,6 +245,7 @@ class ProductionReportView(BaseReportView):
                     }
                 )
 
+        # CSV
         if fmt == "csv":
             if group_by in {"day", "week", "month"}:
                 headers = [bucket_header or "bucket", "event_type", "events", "quantity"]
@@ -218,7 +260,11 @@ class ProductionReportView(BaseReportView):
             resp["Content-Disposition"] = f'attachment; filename="{filename}"'
             return resp
 
-        payload: Dict[str, Any] = {"summary_by_type": by_type_rows}
+        # JSON (unpaginated) with meta.totals
+        totals_qty = qs.aggregate(qty=Sum("quantity_delta"))["qty"] or 0
+        totals = {"events": qs.count(), "quantity": totals_qty}
+
+        payload: Dict[str, Any] = {"summary_by_type": by_type_rows, "meta": {"totals": totals}}
         if timeseries_rows:
             payload["timeseries"] = timeseries_rows
         return Response(payload)

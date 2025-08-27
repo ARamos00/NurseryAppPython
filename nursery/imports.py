@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from io import TextIOWrapper
-from typing import Iterable, List, Tuple, Dict, Any
+from typing import Iterable, List, Tuple, Dict, Any, Optional
 
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
@@ -33,7 +33,15 @@ class ImportResult:
     created_ids: List[int]
 
 
+# ---------------------------------------------------------------------------
+# Size & CSV access
+# ---------------------------------------------------------------------------
+
 def _ensure_size(upload: UploadedFile) -> None:
+    """
+    Guard uploads by size (bytes). Unknown/zero sizes are allowed but the caller
+    must consume the file as a stream, which DictReader does.
+    """
     max_bytes = int(getattr(settings, "MAX_IMPORT_BYTES", 5_000_000))
     size = upload.size if upload.size is not None else 0
     if size and size > max_bytes:
@@ -43,7 +51,7 @@ def _ensure_size(upload: UploadedFile) -> None:
 
 def _open_csv(upload: UploadedFile) -> Iterable[Dict[str, str]]:
     """
-    Wrap the uploaded file in a text wrapper for csv.DictReader.
+    Wrap the uploaded file in a text wrapper for csv.DictReader (streaming).
     Caller must *not* reuse the file after this call.
     """
     _ensure_size(upload)
@@ -55,6 +63,10 @@ def _open_csv(upload: UploadedFile) -> Iterable[Dict[str, str]]:
     for row in reader:
         yield row
 
+
+# ---------------------------------------------------------------------------
+# Normalization & validation helpers
+# ---------------------------------------------------------------------------
 
 def _normalize_str(v: Any) -> str:
     if v is None:
@@ -80,22 +92,61 @@ def _normalize_choice(choice_cls, value: Any) -> str:
     label_map = {label.lower(): val for val, label in choice_cls.choices}
     if s.lower() in label_map:
         return label_map[s.lower()]
-    # also allow common relaxed variants (e.g., snake/hyphen -> space)
+    # allow snake/hyphen -> space
     relaxed = s.lower().replace("_", " ").replace("-", " ")
     if relaxed in label_map:
         return label_map[relaxed]
-    raise ValueError(f"Invalid choice '{value}'. Allowed: {', '.join(v for v, _ in choice_cls.choices)}")
+    raise ValueError(
+        f"Invalid choice '{value}'. Allowed: {', '.join(v for v, _ in choice_cls.choices)}"
+    )
 
 
-# ------------------------------ Import runners ------------------------------
+def _require_fields(
+    row: Dict[str, Any],
+    required: Iterable[str],
+) -> List[str]:
+    """
+    Return list of missing required column names for this row.
+    Works even when DictReader was constructed with incomplete headers.
+    """
+    keys = set(row.keys())
+    missing = [col for col in required if col not in keys]
+    return missing
+
+
+def _parse_int(value: Any, *, min_value: Optional[int] = None) -> Optional[int]:
+    s = _normalize_str(value)
+    if s == "":
+        return None
+    try:
+        n = int(s)
+    except ValueError:
+        raise ValueError("Must be an integer.")
+    if min_value is not None and n < min_value:
+        raise ValueError(f"Must be integer >= {min_value}.")
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Import runners (streaming friendly; preserve response shape)
+# ---------------------------------------------------------------------------
 
 def import_taxa(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> ImportResult:
     ok, failed = 0, 0
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []
 
+    REQUIRED = ("scientific_name",)
+
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):  # header is line 1
+            # Required column check (per-row — preserves streaming)
+            missing = _require_fields(row, REQUIRED)
+            if missing:
+                failed += 1
+                errors.append({"row": idx, "field": "header", "code": "missing_columns", "error": missing})
+                continue
+
             payload = {
                 "scientific_name": _normalize_str(row.get("scientific_name")),
                 "cultivar": _normalize_str(row.get("cultivar")),
@@ -104,7 +155,7 @@ def import_taxa(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -> 
             ser = TaxonSerializer(data=payload)
             if not ser.is_valid():
                 failed += 1
-                errors.append({"row": idx, "error": ser.errors})
+                errors.append({"row": idx, "code": "invalid", "error": ser.errors})
                 continue
             if dry_run:
                 ok += 1
@@ -122,15 +173,26 @@ def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []
 
+    REQUIRED = ("taxon_id", "material_type", "lot_code")
+
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):
+            missing = _require_fields(row, REQUIRED)
+            if missing:
+                failed += 1
+                errors.append({"row": idx, "field": "header", "code": "missing_columns", "error": missing})
+                continue
+
             # FK: taxon must belong to user
             try:
-                taxon_id = int(_normalize_str(row.get("taxon_id")))
+                taxon_id = _parse_int(row.get("taxon_id"), min_value=1)
+                if taxon_id is None:
+                    raise ValueError("Required.")
                 taxon = Taxon.objects.for_user(user).get(pk=taxon_id)
-            except (ValueError, Taxon.DoesNotExist):
+            except (ValueError, Taxon.DoesNotExist) as e:
                 failed += 1
-                errors.append({"row": idx, "field": "taxon_id", "error": "Not found or invalid."})
+                msg = "Not found or invalid." if isinstance(e, Taxon.DoesNotExist) else str(e)
+                errors.append({"row": idx, "field": "taxon_id", "code": "invalid_fk", "error": msg})
                 continue
 
             # Choices
@@ -138,7 +200,7 @@ def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False
                 material_type = _normalize_choice(MaterialType, row.get("material_type"))
             except ValueError as e:
                 failed += 1
-                errors.append({"row": idx, "field": "material_type", "error": str(e)})
+                errors.append({"row": idx, "field": "material_type", "code": "invalid_choice", "error": str(e)})
                 continue
 
             payload = {
@@ -150,7 +212,7 @@ def import_materials(user, rows: Iterable[Dict[str, str]], dry_run: bool = False
             ser = PlantMaterialSerializer(data=payload)
             if not ser.is_valid():
                 failed += 1
-                errors.append({"row": idx, "error": ser.errors})
+                errors.append({"row": idx, "code": "invalid", "error": ser.errors})
                 continue
             if dry_run:
                 ok += 1
@@ -168,26 +230,39 @@ def import_plants(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -
     errors: List[Dict[str, Any]] = []
     created_ids: List[int] = []
 
+    # Keep required set minimal to match existing behavior; other columns are optional.
+    REQUIRED = ("taxon_id",)
+
     with transaction.atomic():
         for idx, row in enumerate(rows, start=2):
+            missing = _require_fields(row, REQUIRED)
+            if missing:
+                failed += 1
+                errors.append({"row": idx, "field": "header", "code": "missing_columns", "error": missing})
+                continue
+
             # FKs and ownership
             try:
-                taxon_id = int(_normalize_str(row.get("taxon_id")))
+                taxon_id = _parse_int(row.get("taxon_id"), min_value=1)
+                if taxon_id is None:
+                    raise ValueError("Required.")
                 taxon = Taxon.objects.for_user(user).get(pk=taxon_id)
-            except (ValueError, Taxon.DoesNotExist):
+            except (ValueError, Taxon.DoesNotExist) as e:
                 failed += 1
-                errors.append({"row": idx, "field": "taxon_id", "error": "Not found or invalid."})
+                msg = "Not found or invalid." if isinstance(e, Taxon.DoesNotExist) else str(e)
+                errors.append({"row": idx, "field": "taxon_id", "code": "invalid_fk", "error": msg})
                 continue
 
             batch_id_raw = _normalize_str(row.get("batch_id"))
-            batch_id = int(batch_id_raw) if batch_id_raw else None
             batch = None
-            if batch_id is not None:
+            if batch_id_raw:
                 try:
+                    batch_id = _parse_int(batch_id_raw, min_value=1)
                     batch = PropagationBatch.objects.for_user(user).get(pk=batch_id)
-                except PropagationBatch.DoesNotExist:
+                except (ValueError, PropagationBatch.DoesNotExist) as e:
                     failed += 1
-                    errors.append({"row": idx, "field": "batch_id", "error": "Not found or invalid."})
+                    msg = "Not found or invalid." if isinstance(e, PropagationBatch.DoesNotExist) else str(e)
+                    errors.append({"row": idx, "field": "batch_id", "code": "invalid_fk", "error": msg})
                     continue
 
             # Choices
@@ -196,17 +271,16 @@ def import_plants(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -
                 status = _normalize_choice(PlantStatus, status_val)
             except ValueError as e:
                 failed += 1
-                errors.append({"row": idx, "field": "status", "error": str(e)})
+                errors.append({"row": idx, "field": "status", "code": "invalid_choice", "error": str(e)})
                 continue
 
-            qty_raw = _normalize_str(row.get("quantity") or "1")
+            # Quantity (default 1)
+            qty_raw = row.get("quantity") or "1"
             try:
-                qty = int(qty_raw)
-                if qty < 1:
-                    raise ValueError
-            except ValueError:
+                qty = _parse_int(qty_raw, min_value=1)
+            except ValueError as e:
                 failed += 1
-                errors.append({"row": idx, "field": "quantity", "error": "Must be integer >= 1."})
+                errors.append({"row": idx, "field": "quantity", "code": "invalid_integer", "error": str(e)})
                 continue
 
             payload = {
@@ -221,7 +295,7 @@ def import_plants(user, rows: Iterable[Dict[str, str]], dry_run: bool = False) -
             ser = PlantSerializer(data=payload)
             if not ser.is_valid():
                 failed += 1
-                errors.append({"row": idx, "error": ser.errors})
+                errors.append({"row": idx, "code": "invalid", "error": ser.errors})
                 continue
 
             if dry_run:
