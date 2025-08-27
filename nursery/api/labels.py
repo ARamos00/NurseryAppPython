@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import secrets
 from datetime import timedelta, date
 
@@ -8,6 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import Count
 from django.db.models.functions import TruncDate
+from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -29,6 +31,11 @@ from nursery.serializers import (
     LabelVisitSeriesPointSerializer,  # per-day points
     LabelStatsWithSeriesSerializer,   # full payload when days provided
 )
+
+# QR code (SVG) generation
+import qrcode
+from qrcode.image.svg import SvgImage
+
 
 IDEMPOTENCY_PARAM = OpenApiParameter(
     name="Idempotency-Key",
@@ -52,6 +59,22 @@ def _new_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _qr_svg_bytes(text: str) -> bytes:
+    """Generate an SVG QR image for `text` (absolute URL)."""
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(image_factory=SvgImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue()
+
+
 class LabelViewSet(viewsets.ModelViewSet):
     """
     Owner-scoped CRUD for QR Labels with token rotation and stats.
@@ -70,6 +93,7 @@ class LabelViewSet(viewsets.ModelViewSet):
       - POST /api/labels/{id}/rotate/  -> 200 with {token, public_url, ...}
       - POST /api/labels/{id}/revoke/  -> 200 {"revoked": true}
       - GET  /api/labels/{id}/stats/   -> 200 owner-only analytics
+      - GET  /api/labels/{id}/qr/?token=<RAW> -> 200 SVG (owner-only; no-store)
     """
 
     permission_classes = [IsAuthenticated, IsOwner]
@@ -227,6 +251,43 @@ class LabelViewSet(viewsets.ModelViewSet):
                 label.active_token = None
                 label.save(update_fields=["active_token", "updated_at"])
         return Response({"id": label.id, "revoked": True}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=["Labels"],
+        parameters=[
+            OpenApiParameter(
+                name="token",
+                type=str,
+                required=True,
+                description="Required raw token for this label (proof of possession).",
+            )
+        ],
+        responses={200: dict},
+        description=(
+            "Return an SVG QR that encodes the public URL for this label's *raw* token. "
+            "Requires `?token=<RAW>` for the **current active token** of this label. "
+            "Response is **not cacheable** (no-store)."
+        ),
+    )
+    @action(detail=True, methods=["get"], url_path="qr")
+    def qr(self, request: Request, pk: str | None = None):
+        label = self.get_object()  # IsOwner enforced
+        raw = (request.query_params.get("token") or "").strip()
+        if not raw:
+            return Response({"detail": "token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate proof-of-possession: must match the current active token
+        if not label.active_token_id or _hash_token(raw) != label.active_token.token_hash:
+            return Response({"detail": "Invalid token for this label."}, status=status.HTTP_403_FORBIDDEN)
+
+        url = self._public_url(request, raw)
+        svg = _qr_svg_bytes(url)
+
+        resp = HttpResponse(svg, content_type="image/svg+xml; charset=utf-8")
+        # Owner QR should never be cached
+        resp["Cache-Control"] = "no-store"
+        resp["Content-Disposition"] = 'inline; filename="label-qr.svg"'
+        return resp
 
     @extend_schema(
         tags=["Labels"],

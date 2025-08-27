@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from typing import Optional
 
+from django.http import HttpResponse
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework.permissions import AllowAny
 from rest_framework.renderers import TemplateHTMLRenderer
@@ -12,6 +15,10 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 
 from nursery.models import LabelToken, LabelVisit
+
+# QR code (SVG) generation
+import qrcode
+from qrcode.image.svg import SvgImage
 
 
 def _hash_token(raw: str) -> str:
@@ -26,11 +33,65 @@ def _client_ip(request) -> Optional[str]:
     """
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
     if xff:
-        # First public entry
         parts = [p.strip() for p in xff.split(",") if p.strip()]
         if parts:
             return parts[0]
     return request.META.get("REMOTE_ADDR") or None
+
+
+def _qr_svg_bytes(text: str) -> bytes:
+    """
+    Produce an SVG QR for the given text (absolute URL).
+    Returns raw SVG bytes.
+    """
+    qr = qrcode.QRCode(
+        version=None,  # fit automatically
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(image_factory=SvgImage)  # full <svg> document
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue()
+
+
+@extend_schema(exclude=True)  # exclude from OpenAPI schema (APIView without serializer)
+class PublicLabelQRView(APIView):
+    """
+    Public QR image for a given *raw* token.
+    - No auth.
+    - Purely encodes the public URL `/p/<token>/`.
+    - **Immutable**: long-lived cache headers; strong ETag; supports If-None-Match.
+    - Throttled via `label-public` scope.
+    """
+    permission_classes = [AllowAny]
+    throttle_scope = "label-public"
+
+    def get(self, request, token: str, *args, **kwargs) -> HttpResponse:
+        # Build the absolute URL to the public label page
+        url = request.build_absolute_uri(reverse("label-public", kwargs={"token": token}))
+
+        # Strong ETag derived from the *text* the QR encodes.
+        etag = hashlib.sha256(("qr:" + url).encode("utf-8")).hexdigest()
+        inm = request.META.get("HTTP_IF_NONE_MATCH")
+        if inm and etag in inm:
+            # Short 304 path for caches
+            resp = HttpResponse(status=304)
+            resp["ETag"] = etag
+            resp["Cache-Control"] = "public, max-age=31536000, immutable"
+            resp["Content-Type"] = "image/svg+xml; charset=utf-8"
+            return resp
+
+        svg = _qr_svg_bytes(url)
+        resp = HttpResponse(svg, content_type="image/svg+xml; charset=utf-8")
+        resp["ETag"] = etag
+        resp["Cache-Control"] = "public, max-age=31536000, immutable"
+        # Optional: filename hint
+        resp["Content-Disposition"] = 'inline; filename="label-qr.svg"'
+        return resp
 
 
 @extend_schema(exclude=True)  # exclude from OpenAPI schema (APIView without serializer)
@@ -108,7 +169,6 @@ class PublicLabelView(APIView):
                                  if hasattr(target, "events") else None)
         elif model_name == "propagationbatch":
             ctx["kind"] = "batch"
-            # Defensive access in case relateds are missing in tests/fixtures
             material = getattr(target, "material", None)
             taxon = getattr(material, "taxon", None) if material else None
             ctx["taxon"] = str(taxon) if taxon else ""

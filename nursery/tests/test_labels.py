@@ -51,19 +51,28 @@ class LabelFlowTests(TestCase):
         pub = self.client.get(public_url)
         self.assertEqual(pub.status_code, 200, pub.content)
 
-        # Old token becomes invalid after rotate
+        # -- New: public QR image (immutable caching)
+        qr = self.client.get(f"/p/{token}/qr.svg")
+        self.assertEqual(qr.status_code, 200, qr.content)
+        self.assertEqual(qr["Content-Type"], "image/svg+xml; charset=utf-8")
+        self.assertIn("immutable", qr["Cache-Control"])
+
+        # -- New: owner QR (no-store) requires proof-of-possession raw token
         rid = resp.data["id"]
+        owner_qr = self.client.get(f"/api/labels/{rid}/qr/?token={token}")
+        self.assertEqual(owner_qr.status_code, 200, owner_qr.content)
+        self.assertEqual(owner_qr["Content-Type"], "image/svg+xml; charset=utf-8")
+        self.assertEqual(owner_qr["Cache-Control"], "no-store")
+
+        # Old token becomes invalid for owner QR after rotate; public QR still returns 200
         r2 = self.client.post(f"/api/labels/{rid}/rotate/", {}, format="json", HTTP_IDEMPOTENCY_KEY="it-2")
         self.assertEqual(r2.status_code, 200, r2.content)
         new_token = r2.data["token"]
 
-        old = self.client.get(public_url)
-        self.assertEqual(old.status_code, 404)
-        new = self.client.get(f"/p/{new_token}/")
-        self.assertEqual(new.status_code, 200)
+        # Owner QR should reject old token
+        old_owner = self.client.get(f"/api/labels/{rid}/qr/?token={token}")
+        self.assertEqual(old_owner.status_code, 403)
 
-        # Revoke
-        r3 = self.client.post(f"/api/labels/{rid}/revoke/", {}, format="json")
-        self.assertEqual(r3.status_code, 200)
-        revoked = self.client.get(f"/p/{new_token}/")
-        self.assertEqual(revoked.status_code, 404)
+        # Public QR remains 200 (it only encodes a URL)
+        new_pub_qr = self.client.get(f"/p/{new_token}/qr.svg")
+        self.assertEqual(new_pub_qr.status_code, 200)

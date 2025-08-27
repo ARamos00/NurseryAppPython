@@ -40,7 +40,7 @@ from nursery.api.v1_aliases import (
 )
 
 # Public pages
-from nursery.public_views import PublicLabelView
+from nursery.public_views import PublicLabelView, PublicLabelQRView
 
 # ---------------------------------------------------------------------
 # Router for current (non-versioned) API
@@ -76,8 +76,9 @@ urlpatterns = [
     path("api/imports/materials/", MaterialsImportView.as_view(), name="import-materials"),
     path("api/imports/plants/", PlantsImportView.as_view(), name="import-plants"),
 
-    # Public label page
+    # Public label page + QR
     path("p/<slug:token>/", PublicLabelView.as_view(), name="label-public"),
+    path("p/<slug:token>/qr.svg", PublicLabelQRView.as_view(), name="label-public-qr"),
 
     # Router-driven API (current)
     path("api/", include(router.urls)),
