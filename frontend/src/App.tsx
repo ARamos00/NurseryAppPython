@@ -4,6 +4,7 @@ import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 import LoginPage from './pages/Login'
 import RegisterPage from './pages/Register'
+import PasswordChangePage from './pages/PasswordChange'
 import Home from './pages/Home'
 
 export default function App() {
@@ -13,6 +14,14 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route
+            path="/settings/password"
+            element={
+              <RequireAuth>
+                <PasswordChangePage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/"
             element={

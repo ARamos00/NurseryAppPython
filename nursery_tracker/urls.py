@@ -11,7 +11,14 @@ from drf_spectacular.views import (
 )
 
 # Auth APIViews
-from accounts.views import CsrfView, LoginView, LogoutView, MeView, RegisterView
+from accounts.views import (
+    CsrfView,
+    LoginView,
+    LogoutView,
+    MeView,
+    RegisterView,
+    PasswordChangeView,
+)
 
 # ViewSets (router-driven)
 from nursery.api import (
@@ -46,6 +53,7 @@ from nursery.api.v1_aliases import (
     LogoutV1View,
     MeV1View,
     RegisterV1View,
+    PasswordChangeV1View,
 )
 
 # Public pages
@@ -77,6 +85,7 @@ urlpatterns = [
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("api/auth/me/", MeView.as_view(), name="auth-me"),
     path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
+    path("api/auth/password/change/", PasswordChangeView.as_view(), name="auth-password-change"),
 
     # Canonical standalone endpoints
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
@@ -99,6 +108,7 @@ urlpatterns = [
     path("api/v1/auth/logout/", LogoutV1View.as_view(), name="auth-logout-v1"),
     path("api/v1/auth/me/", MeV1View.as_view(), name="auth-me-v1"),
     path("api/v1/auth/register/", RegisterV1View.as_view(), name="auth-register-v1"),
+    path("api/v1/auth/password/change/", PasswordChangeV1View.as_view(), name="auth-password-change-v1"),
 
     path("api/v1/events/export/", EventsExportV1View.as_view(), name="event-export-v1"),
     path("api/v1/reports/inventory/", InventoryReportV1View.as_view(), name="report-inventory-v1"),

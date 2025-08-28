@@ -5,7 +5,14 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParamet
 from drf_spectacular.types import OpenApiTypes
 
 # Canonical views
-from accounts.views import CsrfView, LoginView, LogoutView, MeView, RegisterView
+from accounts.views import (
+    CsrfView,
+    LoginView,
+    LogoutView,
+    MeView,
+    RegisterView,
+    PasswordChangeView,
+)
 from nursery.exports import EventsExportView
 from nursery.api.reports import InventoryReportView, ProductionReportView
 from nursery.api.imports import TaxaImportView, MaterialsImportView, PlantsImportView
@@ -46,6 +53,12 @@ class MeV1View(MeView):
 
 class RegisterV1View(RegisterView):
     @extend_schema(operation_id="auth_register_v1", summary="Register (v1)")
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class PasswordChangeV1View(PasswordChangeView):
+    @extend_schema(operation_id="auth_password_change_v1", summary="Change password (v1)")
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
 

@@ -29,3 +29,11 @@ export async function register(username: string, email: string, password1: strin
     headers: { 'Content-Type': 'application/json' }
   })
 }
+
+export async function passwordChange(old_password: string, new_password1: string, new_password2: string): Promise<void> {
+  await http<void>('auth/password/change/', {
+    method: 'POST',
+    body: JSON.stringify({ old_password, new_password1, new_password2 }),
+    headers: { 'Content-Type': 'application/json' }
+  })
+}

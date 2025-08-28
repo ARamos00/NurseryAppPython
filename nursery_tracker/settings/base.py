@@ -52,19 +52,8 @@ DEBUG = env.bool("DEBUG", False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["127.0.0.1", "localhost"])
 CSRF_TRUSTED_ORIGINS = env.list(
     "CSRF_TRUSTED_ORIGINS",
-    default=[
-        # Django dev server
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-        # SPA dev server (Vite)
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    default=["http://127.0.0.1:8000", "http://localhost:8000"],
 )
-
-# --- Auth feature flags --------------------------------------------------------
-# Registration gate: keep disabled by default; enable in dev.py or via env.
-ENABLE_REGISTRATION = env.bool("ENABLE_REGISTRATION", default=False)
 
 # ---------------------------------------------------------------------
 # Applications
@@ -191,9 +180,8 @@ REST_FRAMEWORK = {
         "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),
         "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),
         "labels-read": env("DRF_THROTTLE_RATE_LABELS_READ", default="60/min"),
-        # Added: scope for session login attempts
+        # NOTE: auth-login scope may be defined in environments that mount the session login view.
         "auth-login": env("DRF_THROTTLE_RATE_AUTH_LOGIN", default="10/min"),
-        "auth-register": env("DRF_THROTTLE_RATE_AUTH_REGISTER", default="5/hour"),
     },
 }
 
@@ -220,9 +208,6 @@ SPECTACULAR_SETTINGS = {
         "EventTypeEnum": "nursery.models.EventType",
     },
 }
-
-# Concurrency strictness toggle
-ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
 
 # --- Size/Limits ---------------------------------------------------------------
 # Max body size for unsafe methods (bytes)
@@ -272,7 +257,8 @@ ENFORCE_IF_MATCH = env.bool("ENFORCE_IF_MATCH", False)
 # Logging (observability)
 # ---------------------------------------------------------------------
 # Minimal, structured console logging for request lines. The RequestIDFilter
-# injects `request_id` even for logs outside HTTP contexts.
+# injects `request_id` even for logs outside HTTP contexts. We keep Django’s
+# own loggers on a plain formatter to avoid expecting request-enriched fields.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -281,25 +267,38 @@ LOGGING = {
         # WHY: Keep the filter lean; enrichers (user, path, status) are done in middleware.
     },
     "formatters": {
+        # Simple structured formatter for our request log channel
         "structured": {
-            "format": "level=%(levelname)s logger=%(name)s request_id=%(request_id)s "
-                      "method=%(method)s path=%(path)s status=%(status)s user_id=%(user_id)s duration_ms=%(duration_ms)s "
-                      "message=%(message)s"
+            "format": (
+                "level=%(levelname)s logger=%(name)s request_id=%(request_id)s "
+                "method=%(method)s path=%(path)s status=%(status)s "
+                "user_id=%(user_id)s duration_ms=%(duration_ms)s message=%(message)s"
+            )
         },
+        # Plain formatter for everything else (Django/third-party)
+        "plain": {"format": "%(levelname)s %(name)s %(message)s"},
     },
     "handlers": {
-        "console": {
+        # Use **plain** console as the root handler for standard logs
+        "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+        # Use **structured** console only for our request logger
+        "request_console": {
             "class": "logging.StreamHandler",
             "filters": ["request_id"],
             "formatter": "structured",
         },
     },
+    # Root gets the plain console so `django.request` and others remain simple and safe
+    "root": {"handlers": ["console"], "level": "INFO"},
     "loggers": {
+        # The middleware logs one line per request to this logger with enriched fields
         "nursery.request": {
-            "handlers": ["console"],
+            "handlers": ["request_console"],
             "level": "INFO",
             "propagate": False,
-
         },
+        # Let django.* loggers use the plain root handler (or bind explicitly if you prefer)
+        "django.request": {"level": "WARNING", "propagate": True},
+        "django.security": {"level": "WARNING", "propagate": True},
     },
 }
