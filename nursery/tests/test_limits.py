@@ -13,7 +13,7 @@ What these tests verify
 
 Notes
 -----
-- Each test uses `@override_settings` to clamp limits/sizes tightly so assertions are fast.
+- Each tests uses `@override_settings` to clamp limits/sizes tightly so assertions are fast.
 - Tests log in as a real user to exercise owner-scoped querysets.
 """
 

@@ -18,7 +18,7 @@ What these tests verify
 
 Notes
 -----
-- The test uses an idempotency header on create/rotate to mirror production
+- The tests uses an idempotency header on create/rotate to mirror production
   guidance for safe retries (`HTTP_IDEMPOTENCY_KEY`).
 """
 

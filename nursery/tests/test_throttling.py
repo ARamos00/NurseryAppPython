@@ -10,10 +10,10 @@ What these tests verify
 
 Notes
 -----
-- We patch `TaxonViewSet.throttle_classes` (and permissions for the anon test)
-  at runtime and restore originals with `addCleanup` to avoid cross-test bleed.
+- We patch `TaxonViewSet.throttle_classes` (and permissions for the anon tests)
+  at runtime and restore originals with `addCleanup` to avoid cross-tests bleed.
 - The tests focus on DRF's throttle integration; underlying view behavior
-  remains unchanged and is not under test here.
+  remains unchanged and is not under tests here.
 """
 
 from django.core.cache import cache
@@ -21,7 +21,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.test import APIClient, APITestCase
 
 from accounts.models import User
-from core.permissions import IsOwner  # imported by the module under test; not used directly
+from core.permissions import IsOwner  # imported by the module under tests; not used directly
 from core.throttling import UserBurstThrottle, AnonBurstThrottle
 from nursery.api import TaxonViewSet
 
@@ -30,7 +30,7 @@ class ThrottlingTests(APITestCase):
     """Burst throttle behavior for authenticated and anonymous callers."""
 
     def setUp(self):
-        # Ensure a clean throttle state for each test case.
+        # Ensure a clean throttle state for each tests case.
         cache.clear()
         self.client = APIClient()
         self.alice = User.objects.create_user(username="alice", password="pass12345")
@@ -40,7 +40,7 @@ class ThrottlingTests(APITestCase):
         Apply a very small user throttle to the TaxonViewSet and prove
         the 4th POST within a minute returns 429.
         """
-        # Patch view throttle classes for this test only.
+        # Patch view throttle classes for this tests only.
         orig_throttle = getattr(TaxonViewSet, "throttle_classes", [])
         TaxonViewSet.throttle_classes = [UserBurstThrottle]
         self.addCleanup(setattr, TaxonViewSet, "throttle_classes", orig_throttle)

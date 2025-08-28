@@ -77,7 +77,7 @@ class BulkAndExportTests(TestCase):
         Bulk status endpoint updates multiple plants and records SELL events.
 
         Also verifies that idempotency is supported via `HTTP_IDEMPOTENCY_KEY`;
-        (we do not re-post in this test—the server must still accept the header).
+        (we do not re-post in this tests—the server must still accept the header).
         """
         resp = self.client.post(
             "/api/plants/bulk/status/",

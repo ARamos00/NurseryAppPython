@@ -491,7 +491,7 @@ python manage.py deliver_webhooks
 Run the full suite:
 
 ```bash
-python manage.py test -v 2
+python manage.py tests -v 2
 ```
 
 Coverage includes models (constraints/invariants), auth/ownership, filters & ordering,

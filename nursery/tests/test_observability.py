@@ -14,7 +14,7 @@ Notes
 - The middleware stack is minimized via `@override_settings` so we can reason
   about order; our middleware is placed last to observe the final status code.
 - We use `self.assertLogs("nursery.request")` to capture the dedicated channel,
-  making the test independent of global LOGGING configuration.
+  making the tests independent of global LOGGING configuration.
 """
 
 from __future__ import annotations

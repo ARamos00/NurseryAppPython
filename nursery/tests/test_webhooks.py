@@ -13,7 +13,7 @@ Notes
 -----
 - We patch `urlopen` used by the management command to simulate success/failure
   without performing real I/O.
-- Settings are overridden per test to exercise the feature flags and timing.
+- Settings are overridden per tests to exercise the feature flags and timing.
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ What these tests verify
 Notes
 -----
 - Runtime enforcement is controlled by settings (e.g., `ENFORCE_IF_MATCH=True`);
-  these tests assume enforcement is enabled in the test environment.
+  these tests assume enforcement is enabled in the tests environment.
 - We deliberately mutate the underlying model (`Plant.objects.update(...)`) to
   make the previously fetched ETag stale before issuing a client PATCH.
 """

@@ -52,7 +52,14 @@ DEBUG = env.bool("DEBUG", False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["127.0.0.1", "localhost"])
 CSRF_TRUSTED_ORIGINS = env.list(
     "CSRF_TRUSTED_ORIGINS",
-    default=["http://127.0.0.1:8000", "http://localhost:8000"],
+    default=[
+        # Django dev server
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        # SPA dev server (Vite)
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
 )
 
 # ---------------------------------------------------------------------
@@ -180,6 +187,8 @@ REST_FRAMEWORK = {
         "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),
         "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),
         "labels-read": env("DRF_THROTTLE_RATE_LABELS_READ", default="60/min"),
+        # Added: scope for session login attempts
+        "auth-login": env("DRF_THROTTLE_RATE_AUTH_LOGIN", default="10/min"),
     },
 }
 
@@ -267,7 +276,6 @@ LOGGING = {
         # WHY: Keep the filter lean; enrichers (user, path, status) are done in middleware.
     },
     "formatters": {
-        # Simple structured formatter; extend as needed in prod.py
         "structured": {
             "format": "level=%(levelname)s logger=%(name)s request_id=%(request_id)s "
                       "method=%(method)s path=%(path)s status=%(status)s user_id=%(user_id)s duration_ms=%(duration_ms)s "
@@ -282,11 +290,11 @@ LOGGING = {
         },
     },
     "loggers": {
-        # The middleware logs one line per request to this logger.
         "nursery.request": {
             "handlers": ["console"],
             "level": "INFO",
             "propagate": False,
+
         },
     },
 }

@@ -16,6 +16,7 @@ Scope
 - Reports: GET `/api/v1/reports/*` mirror `/api/reports/*`.
 - Imports: POST `/api/v1/imports/*` mirror `/api/imports/*`; the multipart file
   request shape is explicitly documented for better Swagger UI UX.
+- Auth: GET/POST `/api/v1/auth/*` mirror `/api/auth/*`.
 
 Notes
 -----
@@ -31,6 +32,8 @@ from drf_spectacular.utils import (
 )
 from drf_spectacular.types import OpenApiTypes
 
+# Canonical views
+from accounts.views import CsrfView, LoginView, LogoutView, MeView
 from nursery.exports import EventsExportView
 from nursery.api.reports import InventoryReportView, ProductionReportView
 from nursery.api.imports import TaxaImportView, MaterialsImportView, PlantsImportView
@@ -51,6 +54,64 @@ class ImportResultSerializer(serializers.Serializer):
         required=False,
         help_text="Human-readable error messages per failed row.",
     )
+
+
+# ------------------------------------------------------------------------------
+# Auth (v1 wrappers)
+# ------------------------------------------------------------------------------
+class CsrfV1View(CsrfView):
+    """v1 schema wrapper for the CSRF priming endpoint."""
+    @extend_schema(
+        operation_id="auth_csrf_v1",
+        summary="Prime CSRF cookie (v1 mirror)",
+        description=(
+            "Mirror of `/api/auth/csrf/`. Returns 204 and sets the CSRF cookie. "
+            "Also includes the token in the `X-CSRFToken` response header."
+        ),
+        responses={204: OpenApiResponse(description="CSRF cookie set")},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class LoginV1View(LoginView):
+    """v1 schema wrapper for login."""
+    @extend_schema(
+        operation_id="auth_login_v1",
+        summary="Log in (v1 mirror)",
+        responses={
+            200: OpenApiResponse(description="Authenticated user JSON"),
+            400: OpenApiResponse(description="Invalid credentials"),
+            429: OpenApiResponse(description="Too many attempts (throttled)"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class LogoutV1View(LogoutView):
+    """v1 schema wrapper for logout."""
+    @extend_schema(
+        operation_id="auth_logout_v1",
+        summary="Log out (v1 mirror)",
+        responses={204: OpenApiResponse(description="Logged out")},
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class MeV1View(MeView):
+    """v1 schema wrapper for current user."""
+    @extend_schema(
+        operation_id="auth_me_v1",
+        summary="Current user (v1 mirror)",
+        responses={
+            200: OpenApiResponse(description="Authenticated user JSON"),
+            401: OpenApiResponse(description="Not authenticated"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
 
 # ------------------------------------------------------------------------------
@@ -78,14 +139,12 @@ class EventsExportV1View(EventsExportView):
                 description="Output format. Default: csv",
             )
         ],
-        # NOTE: Tuple keys allow per-media-type examples for the same status code.
         responses={
             (200, "text/csv"): OpenApiTypes.BINARY,
             (200, "application/json"): EventSerializer(many=True),
         },
     )
     def get(self, request, *args, **kwargs):
-        # WHY: Delegate to canonical behavior to avoid drift between surfaces.
         return super().get(request, *args, **kwargs)
 
 
@@ -116,15 +175,11 @@ class ProductionReportV1View(ProductionReportView):
 
 # ------------------------------------------------------------------------------
 # Imports (POST) — mirrors of /api/imports/*
-# Document a multipart file upload and a simple JSON result.
 # ------------------------------------------------------------------------------
 _MULTIPART_FILE_REQUEST = {
     "multipart/form-data": {
         "type": "object",
-        "properties": {
-            # Swagger UI will render a file picker for this field.
-            "file": {"type": "string", "format": "binary", "description": "CSV file"},
-        },
+        "properties": {"file": {"type": "string", "format": "binary", "description": "CSV file"}},
         "required": ["file"],
     }
 }
@@ -137,10 +192,8 @@ class TaxaImportV1View(TaxaImportView):
         summary="Taxa CSV import (v1 mirror)",
         description="Upload a CSV with taxa. Field name: `file` (multipart/form-data).",
         request=_MULTIPART_FILE_REQUEST,
-        responses={
-            201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
-            400: OpenApiResponse(description="Invalid CSV or validation errors"),
-        },
+        responses={201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
+                   400: OpenApiResponse(description="Invalid CSV or validation errors")},
     )
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
@@ -153,10 +206,8 @@ class MaterialsImportV1View(MaterialsImportView):
         summary="Materials CSV import (v1 mirror)",
         description="Upload a CSV with plant materials. Field name: `file` (multipart/form-data).",
         request=_MULTIPART_FILE_REQUEST,
-        responses={
-            201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
-            400: OpenApiResponse(description="Invalid CSV or validation errors"),
-        },
+        responses={201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
+                   400: OpenApiResponse(description="Invalid CSV or validation errors")},
     )
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
@@ -169,10 +220,8 @@ class PlantsImportV1View(PlantsImportView):
         summary="Plants CSV import (v1 mirror)",
         description="Upload a CSV with plants. Field name: `file` (multipart/form-data).",
         request=_MULTIPART_FILE_REQUEST,
-        responses={
-            201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
-            400: OpenApiResponse(description="Invalid CSV or validation errors"),
-        },
+        responses={201: OpenApiResponse(response=ImportResultSerializer, description="Import result"),
+                   400: OpenApiResponse(description="Invalid CSV or validation errors")},
     )
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)

@@ -12,7 +12,7 @@ What these tests verify
 Notes
 -----
 - `transaction.atomic()` is used where we expect an `IntegrityError` to avoid
-  leaving the connection in a broken transaction state during the test run.
+  leaving the connection in a broken transaction state during the tests run.
 - `full_clean()` is exercised on `Event` to assert model-level validation,
   not just serializer-level rules.
 """
@@ -55,7 +55,7 @@ class ModelBasicsTests(TestCase):
         self.assertEqual(str(t1), "Acer palmatum")
 
         # Same user + same identity -> unique constraint triggers.
-        # NOTE: Wrap in atomic to keep the test DB connection usable after the error.
+        # NOTE: Wrap in atomic to keep the tests DB connection usable after the error.
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 Taxon.objects.create(

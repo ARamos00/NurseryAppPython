@@ -39,7 +39,7 @@ def _subscribed(endp: WebhookEndpoint, event_type: str) -> bool:
         - Inactive endpoints never receive events.
         - Missing/empty `event_types` -> subscribe to all.
         - `"*"` in `event_types` -> subscribe to all.
-        - Otherwise, exact membership test.
+        - Otherwise, exact membership tests.
 
     Args:
         endp: `WebhookEndpoint` instance to evaluate.

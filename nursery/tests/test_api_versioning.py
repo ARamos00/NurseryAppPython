@@ -28,7 +28,7 @@ class ApiVersioningSmokeTests(TestCase):
     """Liveness checks for `/api/v1/` routes and minimal response shapes."""
 
     def setUp(self):
-        """Authenticate a test user so owner-scoped querysets return results."""
+        """Authenticate a tests user so owner-scoped querysets return results."""
         User = get_user_model()
         self.user = User.objects.create_user(username="v1", password="pw")
         self.client = APIClient()

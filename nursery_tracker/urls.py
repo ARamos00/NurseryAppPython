@@ -28,6 +28,9 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
+# Auth APIViews
+from accounts.views import CsrfView, LoginView, LogoutView, MeView
+
 # ViewSets (router-driven)
 from nursery.api import (
     TaxonViewSet,
@@ -55,6 +58,11 @@ from nursery.api.v1_aliases import (
     TaxaImportV1View,
     MaterialsImportV1View,
     PlantsImportV1View,
+    # Auth v1 wrappers
+    CsrfV1View,
+    LoginV1View,
+    LogoutV1View,
+    MeV1View,
 )
 
 # Public pages
@@ -86,6 +94,14 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 
+    # --------------------------
+    # Auth (canonical)
+    # --------------------------
+    path("api/auth/csrf/", CsrfView.as_view(), name="auth-csrf"),
+    path("api/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/auth/me/", MeView.as_view(), name="auth-me"),
+
     # Canonical standalone endpoints (current)
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
     path("api/reports/inventory/", InventoryReportView.as_view(), name="report-inventory"),
@@ -104,6 +120,13 @@ urlpatterns = [
     # --------------------------
     # API v1 (frozen surface)
     # --------------------------
+    # Auth (v1 mirror)
+    path("api/v1/auth/csrf/", CsrfV1View.as_view(), name="auth-csrf-v1"),
+    path("api/v1/auth/login/", LoginV1View.as_view(), name="auth-login-v1"),
+    path("api/v1/auth/logout/", LogoutV1View.as_view(), name="auth-logout-v1"),
+    path("api/v1/auth/me/", MeV1View.as_view(), name="auth-me-v1"),
+
+    # Other v1 wrappers
     path("api/v1/events/export/", EventsExportV1View.as_view(), name="event-export-v1"),
     path("api/v1/reports/inventory/", InventoryReportV1View.as_view(), name="report-inventory-v1"),
     path("api/v1/reports/production/", ProductionReportV1View.as_view(), name="report-production-v1"),
