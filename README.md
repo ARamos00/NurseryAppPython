@@ -1,4 +1,4 @@
-# 🌱 Nursery Tracker — Django/DRF backend
+# Nursery Tracker — Django/DRF backend
 
 A production-grade **Django 5.2 + Django REST Framework 3.16** backend for tracking nursery operations:
 **taxa**, **plant materials**, **propagation batches**, **plants**, **events** — with
