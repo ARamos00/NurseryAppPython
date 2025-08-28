@@ -21,3 +21,11 @@ export async function logout(): Promise<void> {
 export async function me(): Promise<User> {
   return await http<User>('auth/me/', { method: 'GET', unsafe: false })
 }
+
+export async function register(username: string, email: string, password1: string, password2: string): Promise<User> {
+  return await http<User>('auth/register/', {
+    method: 'POST',
+    body: JSON.stringify({ username, email, password1, password2 }),
+    headers: { 'Content-Type': 'application/json' }
+  })
+}

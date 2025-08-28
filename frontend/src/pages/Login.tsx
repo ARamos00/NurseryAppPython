@@ -1,5 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import * as api from '../api/auth'
 import { useAuth } from '../auth/AuthContext'
 
@@ -34,7 +34,7 @@ export default function LoginPage() {
       nav(next, { replace: true })
     } catch (err: any) {
       if (err?.status === 400 || err?.status === 401) setError('Invalid username or password.')
-      else if (err?.status === 429) setError('Too many attempts. Please wait and try again.')
+      else if (err?.status === 429) setError('Too many attempts; please wait.')
       else setError('Something went wrong. Please try again.')
     } finally {
       setLoading(false)
@@ -74,6 +74,9 @@ export default function LoginPage() {
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+      <p style={{ marginTop: 12 }}>
+        New here? <Link to="/register">Create an account</Link>
+      </p>
     </main>
   )
 }

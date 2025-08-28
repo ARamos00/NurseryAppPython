@@ -62,6 +62,10 @@ CSRF_TRUSTED_ORIGINS = env.list(
     ],
 )
 
+# --- Auth feature flags --------------------------------------------------------
+# Registration gate: keep disabled by default; enable in dev.py or via env.
+ENABLE_REGISTRATION = env.bool("ENABLE_REGISTRATION", default=False)
+
 # ---------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------
@@ -189,6 +193,7 @@ REST_FRAMEWORK = {
         "labels-read": env("DRF_THROTTLE_RATE_LABELS_READ", default="60/min"),
         # Added: scope for session login attempts
         "auth-login": env("DRF_THROTTLE_RATE_AUTH_LOGIN", default="10/min"),
+        "auth-register": env("DRF_THROTTLE_RATE_AUTH_REGISTER", default="5/hour"),
     },
 }
 

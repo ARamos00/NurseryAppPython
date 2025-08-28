@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from django.contrib.auth import authenticate, login as dj_login, logout as dj_logout
+from django.contrib.auth import authenticate, get_user_model, login as dj_login, logout as dj_logout
 from django.middleware.csrf import get_token
+from django.conf import settings
 from django.utils.translation import gettext_lazy as _
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import status, permissions, serializers
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse
+from rest_framework.validators import UniqueValidator
+
+User = get_user_model()
 
 
 class _UserPublicSerializer(serializers.Serializer):
@@ -27,19 +32,13 @@ class CsrfView(APIView):
     GET only: prime a CSRF cookie and expose the token.
 
     - Sets the `csrftoken` cookie (via `get_token(request)`).
-    - Returns HTTP 204 with **no body** for stability, but includes the token in
-      the `X-CSRFToken` response header so SPAs can read it even if
-      `CSRF_COOKIE_HTTPONLY=True` in production.
+    - Returns HTTP 204 with **no body**, includes the token in `X-CSRFToken` header.
     """
     permission_classes = [permissions.AllowAny]
 
     @extend_schema(
         operation_id="auth_csrf",
         summary="Prime CSRF cookie",
-        description=(
-            "Generates/sets the CSRF cookie and returns 204. The CSRF token is "
-            "also provided in the `X-CSRFToken` response header for SPA clients."
-        ),
         responses={204: OpenApiResponse(description="CSRF cookie set")},
     )
     def get(self, request, *args, **kwargs):
@@ -97,7 +96,7 @@ class LogoutView(APIView):
     """
     Session logout.
     - Returns 204 even if the user is already logged out (idempotent).
-    - CSRF is enforced by middleware (do NOT exempt).
+    - CSRF enforced by middleware.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -129,3 +128,75 @@ class MeView(APIView):
         u = request.user
         payload = {"id": u.id, "username": u.get_username(), "email": u.email or ""}
         return Response(payload, status=status.HTTP_200_OK)
+
+
+# -----------------------------
+# Registration
+# -----------------------------
+class _RegisterSerializer(serializers.Serializer):
+    username = serializers.CharField(
+        max_length=150,
+        validators=[UniqueValidator(queryset=User.objects.all(), message=_("A user with that username already exists."))]
+    )
+    email = serializers.EmailField(
+        validators=[UniqueValidator(queryset=User.objects.all(), message=_("A user with that email already exists."))]
+    )
+    password1 = serializers.CharField(write_only=True, trim_whitespace=False)
+    password2 = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        p1 = attrs.get("password1")
+        p2 = attrs.get("password2")
+        if p1 != p2:
+            raise serializers.ValidationError({"password2": _("Passwords do not match.")})
+        # Use Django validators (min length, common, numeric, etc.)
+        validate_password(p1)
+        return attrs
+
+    def create(self, validated_data):
+        return User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data["email"],
+            password=validated_data["password1"],
+        )
+
+
+class RegisterView(APIView):
+    """
+    Create a new user account.
+    - Requires email; validates strong password.
+    - Throttled with scope `auth-register`.
+    - Auto-logs in on success (configurable via settings).
+    - Controlled by `ENABLE_REGISTRATION`; returns 403 if disabled.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth-register"
+
+    @extend_schema(
+        operation_id="auth_register",
+        summary="Register a new account",
+        request=_RegisterSerializer,
+        responses={
+            201: _UserPublicSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Registration disabled"),
+            429: OpenApiResponse(description="Too many attempts (throttled)"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        if not getattr(settings, "ENABLE_REGISTRATION", False):
+            return Response(
+                {"detail": _("Registration is disabled."), "code": "registration_disabled"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = _RegisterSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        user = ser.save()
+
+        # Auto-login after successful registration (best default for UX)
+        dj_login(request, user)
+
+        payload = {"id": user.id, "username": user.get_username(), "email": user.email or ""}
+        return Response(payload, status=status.HTTP_201_CREATED)

@@ -35,6 +35,8 @@ CSRF_TRUSTED_ORIGINS = env.list(
     ],
 )
 
+ENABLE_REGISTRATION = env.bool("ENABLE_REGISTRATION", True)
+
 # ---------------------------------------------------------------------
 # Optional: verbose CSRF diagnostics in dev ONLY.
 # This logs the exact CSRF rejection reason (origin mismatch, missing cookie,
