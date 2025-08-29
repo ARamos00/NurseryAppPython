@@ -180,8 +180,12 @@ REST_FRAMEWORK = {
         "imports": env("DRF_THROTTLE_RATE_IMPORTS", default="6/min"),
         "reports-read": env("DRF_THROTTLE_RATE_REPORTS_READ", default="60/min"),
         "labels-read": env("DRF_THROTTLE_RATE_LABELS_READ", default="60/min"),
-        # NOTE: auth-login scope may be defined in environments that mount the session login view.
+        # Auth scopes
         "auth-login": env("DRF_THROTTLE_RATE_AUTH_LOGIN", default="10/min"),
+        "auth-register": env("DRF_THROTTLE_RATE_AUTH_REGISTER", default="6/min"),
+        "auth-password-change": env("DRF_THROTTLE_RATE_AUTH_PASSWORD_CHANGE", default="6/min"),
+        "auth-password-reset": env("DRF_THROTTLE_RATE_AUTH_PASSWORD_RESET", default="5/min"),
+        "auth-password-reset-confirm": env("DRF_THROTTLE_RATE_AUTH_PASSWORD_RESET_CONFIRM", default="5/min"),
     },
 }
 

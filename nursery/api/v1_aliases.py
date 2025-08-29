@@ -12,6 +12,8 @@ from accounts.views import (
     MeView,
     RegisterView,
     PasswordChangeView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 from nursery.exports import EventsExportView
 from nursery.api.reports import InventoryReportView, ProductionReportView
@@ -59,6 +61,18 @@ class RegisterV1View(RegisterView):
 
 class PasswordChangeV1View(PasswordChangeView):
     @extend_schema(operation_id="auth_password_change_v1", summary="Change password (v1)")
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class PasswordResetRequestV1View(PasswordResetRequestView):
+    @extend_schema(operation_id="auth_password_reset_v1", summary="Request password reset (v1)")
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class PasswordResetConfirmV1View(PasswordResetConfirmView):
+    @extend_schema(operation_id="auth_password_reset_confirm_v1", summary="Confirm password reset (v1)")
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
 

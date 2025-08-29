@@ -9,7 +9,11 @@ from django.contrib.auth import (
     update_session_auth_hash,
 )
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core.mail import send_mail
 from django.middleware.csrf import get_token
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.translation import gettext_lazy as _
 from rest_framework import permissions, serializers, status
 from rest_framework.response import Response
@@ -267,4 +271,138 @@ class PasswordChangeView(APIView):
         user.save(update_fields=["password"])
         update_session_auth_hash(request, user)
 
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# -----------------------------
+# Password Reset (unauthenticated)
+# -----------------------------
+class _PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetRequestView(APIView):
+    """
+    Start password reset for a user by email.
+    - Always returns 204 (no enumeration).
+    - Throttled with scope `auth-password-reset`.
+    - CSRF enforced by middleware.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth-password-reset"
+
+    @extend_schema(
+        operation_id="auth_password_reset",
+        summary="Request password reset",
+        request=_PasswordResetRequestSerializer,
+        responses={204: OpenApiResponse(description="If the email exists, a reset message has been sent."),
+                   429: OpenApiResponse(description="Too many attempts (throttled)")},
+    )
+    def post(self, request, *args, **kwargs):
+        ser = _PasswordResetRequestSerializer(data=request.data)
+        if ser.is_valid():
+            email = ser.validated_data["email"]
+            # Avoid user enumeration: do not reveal whether a user exists.
+            users = list(User.objects.filter(email__iexact=email, is_active=True)[:5])
+            if users:
+                frontend_url = getattr(settings, "FRONTEND_PASSWORD_RESET_URL", None)
+                for u in users:
+                    uid = urlsafe_base64_encode(force_bytes(u.pk))
+                    token = default_token_generator.make_token(u)
+                    # Compose a minimal, plain text message.
+                    if frontend_url:
+                        link = f"{frontend_url}?uid={uid}&token={token}"
+                        body = (
+                            "We received a request to reset your password.\n\n"
+                            f"Reset link: {link}\n\n"
+                            "If you did not request this, you can ignore this email."
+                        )
+                    else:
+                        # Dev-friendly: include uid/token directly for manual entry.
+                        body = (
+                            "We received a request to reset your password.\n\n"
+                            f"UID: {uid}\nTOKEN: {token}\n\n"
+                            "If you did not request this, you can ignore this email."
+                        )
+                    subject = "Password reset requested"
+                    from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@localhost")
+                    try:
+                        send_mail(subject, body, from_addr, [email], fail_silently=True)
+                    except Exception:
+                        # Swallow email errors to preserve non-enumeration.
+                        pass
+        # Always 204
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class _PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password1 = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password2 = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        uid = attrs.get("uid")
+        token = attrs.get("token")
+        p1 = attrs.get("new_password1")
+        p2 = attrs.get("new_password2")
+
+        # Check passwords match first
+        if p1 != p2:
+            raise serializers.ValidationError({"new_password2": _("Passwords do not match.")})
+
+        # Resolve user
+        try:
+            uid_int = int(urlsafe_base64_decode(uid).decode("utf-8"))
+        except Exception:
+            raise serializers.ValidationError({"uid": _("Invalid or expired token.")})
+        try:
+            user = User.objects.get(pk=uid_int, is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"uid": _("Invalid or expired token.")})
+
+        # Token validity
+        if not default_token_generator.check_token(user, token):
+            raise serializers.ValidationError({"token": _("Invalid or expired token.")})
+
+        # Password strength per Django validators
+        validate_password(p1, user=user)
+
+        # Stash resolved user for the view
+        attrs["user"] = user
+        return attrs
+
+
+class PasswordResetConfirmView(APIView):
+    """
+    Complete password reset given uid & token.
+    - Throttled with scope `auth-password-reset-confirm`.
+    - CSRF enforced by middleware.
+    - Returns 204 on success; 400 for invalid token/validation.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth-password-reset-confirm"
+
+    @extend_schema(
+        operation_id="auth_password_reset_confirm",
+        summary="Confirm password reset",
+        request=_PasswordResetConfirmSerializer,
+        responses={
+            204: OpenApiResponse(description="Password reset"),
+            400: OpenApiResponse(description="Invalid token or validation error"),
+            429: OpenApiResponse(description="Too many attempts (throttled)"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        ser = _PasswordResetConfirmSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        user: User = ser.validated_data["user"]
+        new_password = ser.validated_data["new_password1"]
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+
+        # Do not log in automatically; let the user sign in explicitly.
         return Response(status=status.HTTP_204_NO_CONTENT)

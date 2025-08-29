@@ -18,6 +18,8 @@ from accounts.views import (
     MeView,
     RegisterView,
     PasswordChangeView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 
 # ViewSets (router-driven)
@@ -54,6 +56,8 @@ from nursery.api.v1_aliases import (
     MeV1View,
     RegisterV1View,
     PasswordChangeV1View,
+    PasswordResetRequestV1View,
+    PasswordResetConfirmV1View,
 )
 
 # Public pages
@@ -86,6 +90,8 @@ urlpatterns = [
     path("api/auth/me/", MeView.as_view(), name="auth-me"),
     path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
     path("api/auth/password/change/", PasswordChangeView.as_view(), name="auth-password-change"),
+    path("api/auth/password/reset/", PasswordResetRequestView.as_view(), name="auth-password-reset"),
+    path("api/auth/password/reset/confirm/", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
 
     # Canonical standalone endpoints
     path("api/events/export/", EventsExportView.as_view(), name="event-export"),
@@ -109,6 +115,8 @@ urlpatterns = [
     path("api/v1/auth/me/", MeV1View.as_view(), name="auth-me-v1"),
     path("api/v1/auth/register/", RegisterV1View.as_view(), name="auth-register-v1"),
     path("api/v1/auth/password/change/", PasswordChangeV1View.as_view(), name="auth-password-change-v1"),
+    path("api/v1/auth/password/reset/", PasswordResetRequestV1View.as_view(), name="auth-password-reset-v1"),
+    path("api/v1/auth/password/reset/confirm/", PasswordResetConfirmV1View.as_view(), name="auth-password-reset-confirm-v1"),
 
     path("api/v1/events/export/", EventsExportV1View.as_view(), name="event-export-v1"),
     path("api/v1/reports/inventory/", InventoryReportV1View.as_view(), name="report-inventory-v1"),
