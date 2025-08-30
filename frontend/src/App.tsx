@@ -1,6 +1,6 @@
 import React from 'react'
-import { BrowserRouter, Route, Routes, Navigate, Link } from 'react-router-dom'
-import { AuthProvider, useAuth } from './auth/AuthContext'
+import { BrowserRouter, Route, Routes, Navigate, Outlet } from 'react-router-dom'
+import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 
 // Pages
@@ -10,41 +10,19 @@ import RegisterPage from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import PasswordChangePage from './pages/PasswordChange'
-import LogoutButton from './auth/LogoutButton'
 
-// Minimal app layout with account section
-function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth()
+// Layout
+import NavBar from './components/NavBar'
 
+/**
+ * Application layout used for all protected routes.
+ * Renders the shared NavBar and the active page via <Outlet/>.
+ */
+function AppLayout() {
   return (
     <div>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.75rem 1rem',
-          borderBottom: '1px solid #e5e7eb',
-        }}
-      >
-        <nav aria-label="Primary" style={{ display: 'flex', gap: 16 }}>
-          <Link to="/" style={{ textDecoration: 'none', fontWeight: 600 }}>
-            Nursery Tracker
-          </Link>
-          <Link to="/settings/password">Password</Link>
-        </nav>
-        <div>
-          {user && (
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-              <span title={user.email} style={{ fontSize: 14, color: '#374151' }} aria-live="polite">
-                {user.username}
-              </span>
-              <LogoutButton />
-            </div>
-          )}
-        </div>
-      </header>
-      {children}
+      <NavBar />
+      <Outlet />
     </div>
   )
 }
@@ -60,27 +38,17 @@ export default function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* Protected application routes */}
+          {/* Protected application routes — single layout route */}
           <Route
-            path="/"
             element={
               <RequireAuth>
-                <AppLayout>
-                  <Home />
-                </AppLayout>
+                <AppLayout />
               </RequireAuth>
             }
-          />
-          <Route
-            path="/settings/password"
-            element={
-              <RequireAuth>
-                <AppLayout>
-                  <PasswordChangePage />
-                </AppLayout>
-              </RequireAuth>
-            }
-          />
+          >
+            <Route path="/" element={<Home />} />
+            <Route path="/settings/password" element={<PasswordChangePage />} />
+          </Route>
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />

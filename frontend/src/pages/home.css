@@ -1,0 +1,92 @@
+/* Home layout & cards
+   -------------------------------------------------------
+   Core idea: keep a visually pleasing rounded border by
+   ensuring the outer container's radius equals the inner
+   panel's radius plus the padding between them.
+
+   Formula implemented via CSS vars:
+   --outer-r = calc(var(--r) + var(--pad))
+*/
+
+:root {
+  --gap: 16px;        /* grid gap */
+  --pad: 16px;        /* card padding */
+  --r: 12px;          /* inner radius */
+}
+
+.grid-page {
+  box-sizing: border-box;
+  padding: var(--gap);
+}
+
+.parent {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, 1fr);
+  grid-column-gap: var(--gap);
+  grid-row-gap: var(--gap);
+  min-height: 80vh;
+}
+
+/* Areas from your updated layout */
+.div1 { grid-area: 1 / 2 / 5 / 5; } /* main */
+.div2 { grid-area: 5 / 1 / 6 / 6; } /* footer */
+.div3 { grid-area: 1 / 1 / 5 / 2; } /* left rail */
+.div4 { grid-area: 1 / 5 / 5 / 6; } /* right rail */
+
+/* Outer container (card) — the border you see */
+.card {
+  /* Outer radius = inner radius + padding */
+  --outer-r: calc(var(--r) + var(--pad));
+
+  position: relative;
+  padding: var(--pad);
+  border: 1px solid #e5e7eb;   /* neutral-200 */
+  background: #f9fafb;         /* neutral-50/100 */
+  border-radius: var(--outer-r);
+  outline: none;
+}
+.card:focus-within {
+  outline: 2px solid #93c5fd;  /* light focus ring */
+  outline-offset: 2px;
+}
+
+/* Inner panel — keeps corners aligned with outer by using --r */
+.card__inner {
+  height: 100%;
+  padding: var(--pad);
+  border: 1px dashed #d1d5db;  /* neutral-300, “wireframe” look */
+  border-radius: var(--r);
+  background: #ffffff;
+
+  display: flex;
+  flex-direction: column;
+}
+
+/* Titles & body copy */
+.card__header { margin: 0 0 8px 0; }
+.card__title  {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #374151; /* neutral-700 */
+  letter-spacing: 0.01em;
+}
+.card__body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.muted { color: #6b7280; font-size: 0.9rem; }
+
+/* Mobile fallback: stack the sections */
+@media (max-width: 900px) {
+  .parent {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+  .div1, .div2, .div3, .div4 {
+    grid-area: auto / auto / auto / auto;
+  }
+}
