@@ -1,12 +1,14 @@
-# Nursery Tracker — Django/DRF backend
+````markdown
+# Nursery Tracker — Django/DRF + React/TypeScript (Vite)
 
-A production-grade **Django 5.2 + Django REST Framework 3.16** backend for tracking nursery operations:
-**taxa**, **plant materials**, **propagation batches**, **plants**, **events** — with
+A production-grade **Django 5.2 + Django REST Framework 3.16** backend with a lightweight **React + TypeScript (Vite)** frontend shell.
+
+Track **taxa**, **plant materials**, **propagation batches**, **plants**, **events** — with
 **per-user tenancy**, **SessionAuth + CSRF**, **OpenAPI docs**, **throttling**, **idempotency**,
 **optimistic concurrency (ETag/If-Match)**, **bulk ops**, **CSV imports/exports**, **reports**,
 **QR labels + public pages**, **auditing**, and **outbound webhooks**.
 
-> The API is the product surface. A separate UI can be layered on later without changing contracts.
+> The API is the stable surface. The frontend consumes the frozen mirror at **`/api/v1/`** to insulate UI changes from backend evolution.
 
 ---
 
@@ -16,8 +18,14 @@ A production-grade **Django 5.2 + Django REST Framework 3.16** backend for track
 - [Architecture Overview](#architecture-overview)
 - [Project Layout](#project-layout)
 - [Getting Started](#getting-started)
-- [Configuration](#configuration)
-- [Runbook](#runbook)
+- [Configuration (Backend)](#configuration-backend)
+- [Frontend (React + TypeScript + Vite)](#frontend-react--typescript--vite)
+  - [Folder Layout](#folder-layout)
+  - [Running the Frontend](#running-the-frontend)
+  - [API Client Conventions](#api-client-conventions)
+  - [Auth Flow (Pages & Components)](#auth-flow-pages--components)
+  - [Testing (Frontend)](#testing-frontend)
+  - [Common Frontend Pitfalls](#common-frontend-pitfalls)
 - [API Docs & URLs](#api-docs--urls)
 - [Security & Tenancy](#security--tenancy)
 - [Domain Model](#domain-model)
@@ -34,7 +42,7 @@ A production-grade **Django 5.2 + Django REST Framework 3.16** backend for track
 - [Webhooks (Outbound)](#webhooks-outbound)
 - [Health, Throttling, Observability](#health-throttling-observability)
 - [Versioning](#versioning)
-- [Testing](#testing)
+- [Testing (Backend)](#testing-backend)
 - [Developer Seed & Reset](#developer-seed--reset)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -43,20 +51,19 @@ A production-grade **Django 5.2 + Django REST Framework 3.16** backend for track
 
 ## Highlights
 
-- **Per-user tenancy** — All domain models subclass `core.OwnedModel` and are scoped by `request.user`.
-- **Session auth + CSRF** — Browser-friendly, production-safe defaults. CSRF is required for unsafe methods.
-- **OpenAPI 3** — drf-spectacular with Swagger UI & Redoc. Custom components for concurrency/idempotency headers.
-- **Idempotency** — Safe retries for POST using `Idempotency-Key`; first success is cached and replayed.
-- **Optimistic concurrency** — ETag on GET; `If-Match` required on write (when enabled), 412 on stale.
+- **Per-user tenancy** — All domain models subclass an owned base and are scoped by `request.user`.
+- **Session auth + CSRF** — Browser-friendly, production-safe defaults. CSRF is **required for unsafe methods**.
+- **OpenAPI 3** — drf-spectacular (Swagger UI & Redoc). Custom components document idempotency/concurrency headers.
+- **Idempotency** — Safe retries for POST using `Idempotency-Key`; first success is replayed.
+- **Optimistic concurrency** — ETag on GET; `If-Match` required on write when enabled; 412 on stale.
 - **Labels & public pages** — Rotatable/revocable tokens, owner/public QR SVG endpoints, visit analytics.
-- **Bulk ops** — Plant bulk status updates; batch harvest/cull/complete; archive (soft delete) for plants/batches.
+- **Bulk ops** — Plant bulk status; batch harvest/cull/complete; archive (soft delete) for plants/batches.
 - **CSV imports/exports** — Events export (CSV/JSON). CSV imports for taxa/materials/plants with dry-run.
 - **Reports** — Inventory snapshot and production summary/timeseries; CSV/JSON; totals included.
 - **Auditing** — Create/update/delete logged with diffs and request metadata.
-- **Webhooks** — Queue + worker command; HTTPS/signature requirements governed by env flags.
+- **Webhooks** — Queue + worker command; HTTPS/signature requirements via env flags.
 - **Throttling** — Global (`user`, `anon`) and named scopes (seed wizard, exports, public labels, imports, reports…).
-- **Observability** — Request-ID middleware adds `X-Request-ID` and logs one structured line per request.
-- **Limits** — Request/upload size guards return consistent **413** JSON.
+- **Observability** — Request-ID middleware logs one structured line per request with latency.
 
 ---
 
@@ -84,7 +91,7 @@ A production-grade **Django 5.2 + Django REST Framework 3.16** backend for track
                                     └─────────────────────┘     └───────────────┘
 ````
 
-* **Tenancy** enforced by `OwnedModel` + `IsOwner`.
+* **Tenancy** enforced by owner-scoped querysets + `IsOwner`.
 * **Concurrency** via ETag/If-Match helpers; **Idempotency** decorator caches first success.
 * **Public surface** for labels at `/p/<token>/` (no auth) with analytics.
 
@@ -131,7 +138,15 @@ NurseryApp/
 ├─ nursery_tracker/
 │  ├─ settings/{base,dev,prod}.py   # 12-factor split
 │  └─ urls.py                       # routers, docs, public, health
-└─ templates/public/label_detail.html
+├─ templates/public/label_detail.html
+└─ frontend/                        # React + TS (Vite) app
+   └─ src/
+      ├─ api/                       # http.ts + auth.ts (+ tests)
+      ├─ auth/                      # AuthContext + RequireAuth + LogoutButton
+      ├─ pages/                     # Login, Register, Forgot/Reset, PasswordChange, Home
+      ├─ test/                      # Vitest setup & tests
+      ├─ App.tsx, main.tsx
+      └─ vite.config.ts, tsconfig.json, index.html, package.json
 ```
 
 ---
@@ -141,55 +156,195 @@ NurseryApp/
 **Prereqs**
 
 * Python **3.12+**
+* Node.js **18+** (front-end dev)
 * SQLite (dev default) or PostgreSQL 14+ (recommended for prod)
 
-**Setup**
+**Backend setup**
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -U pip
 pip install -r requirements.txt
-cp .env.example .env                 # Or create .env using the table below
-```
 
----
-
-## Configuration
-
-The app is 12-factor friendly. Key environment variables:
-
-| Variable                      | Purpose                           | Typical Dev             |
-| ----------------------------- | --------------------------------- | ----------------------- |
-| `DEBUG`                       | Enable debug mode                 | `True`                  |
-| `SECRET_KEY`                  | Django secret                     | `dev-change-me`         |
-| `DATABASE_URL`                | DB connection string              | `sqlite:///db.sqlite3`  |
-| `ALLOWED_HOSTS`               | Host allowlist                    | `127.0.0.1,localhost`   |
-| `CSRF_TRUSTED_ORIGINS`        | Scheme+host for CSRF              | `http://127.0.0.1:8000` |
-| `ENFORCE_IF_MATCH`            | Require `If-Match` on write       | `False` (dev)           |
-| `MAX_REQUEST_BYTES`           | Request body cap                  | optional                |
-| `MAX_IMPORT_BYTES`            | CSV upload cap (bytes)            | `5000000`               |
-| `IMPORT_MAX_ROWS`             | Max data rows per import          | `50000`                 |
-| `EXPORT_MAX_ROWS`             | Max rows returned by export       | optional                |
-| `WEBHOOKS_*`                  | HTTPS/signature/UA/backoff/limits | see settings            |
-| `REST_FRAMEWORK["PAGE_SIZE"]` | Default list page size            | `25`                    |
-
-**Throttling rates** (set via env; see `core/throttling.py` for names):
-
-* Global: `user`, `anon`
-* Scoped: `wizard-seed`, `events-export`, `label-public`, `imports`, `reports-read`, `audit-read`, `labels-read`
-
----
-
-## Runbook
-
-```bash
+# First run
 python manage.py migrate
 python manage.py createsuperuser
-python manage.py runserver
-# (optional) in another terminal: run the webhook worker
-python manage.py deliver_webhooks
+python manage.py runserver 8000
 ```
+
+**Frontend setup**
+
+```bash
+cd frontend
+npm ci
+npm run dev
+# Vite serves at http://localhost:5173 by default (will pick 5174 if busy)
+```
+
+---
+
+## Configuration (Backend)
+
+Key environment variables (12-factor):
+
+| Variable                  | Purpose                                    | Typical Dev                                          |
+| ------------------------- | ------------------------------------------ | ---------------------------------------------------- |
+| `DEBUG`                   | Debug mode                                 | `True`                                               |
+| `SECRET_KEY`              | Django secret                              | `dev-change-me`                                      |
+| `DATABASE_URL`            | DB connection string                       | `sqlite:///db.sqlite3`                               |
+| `ALLOWED_HOSTS`           | Host allowlist                             | `127.0.0.1,localhost`                                |
+| `CSRF_TRUSTED_ORIGINS`    | Scheme+host for CSRF origin/referer checks | include backend (8000) and frontend (5173/5174)      |
+| `CSRF_COOKIE_HTTPONLY`    | Must be **False** for SPA                  | `False` in dev (frontend must read `csrftoken`)      |
+| `CSRF_COOKIE_SAMESITE`    | Cookie SameSite                            | `Lax`                                                |
+| `SESSION_COOKIE_SAMESITE` | Cookie SameSite                            | `Lax`                                                |
+| `ENFORCE_IF_MATCH`        | Require `If-Match` on write                | `False` (dev)                                        |
+| `ENABLE_REGISTRATION`     | Toggle `/auth/register/`                   | `True` in dev, `False` in prod (recommended default) |
+| `MAX_REQUEST_BYTES`       | Request body cap                           | optional                                             |
+| `MAX_IMPORT_BYTES`        | CSV upload cap (bytes)                     | `5000000`                                            |
+| `IMPORT_MAX_ROWS`         | Max rows per import                        | `50000`                                              |
+| `EXPORT_MAX_ROWS`         | Row cap for exports                        | optional                                             |
+| `WEBHOOKS_*`              | HTTPS/signature/UA/backoff/limits          | see settings                                         |
+
+> **Important (dev):** Ensure `CSRF_TRUSTED_ORIGINS` includes `http://localhost:5173` and `http://localhost:5174` (and their `127.0.0.1` equivalents) if Vite switches ports.
+
+---
+
+## Frontend (React + TypeScript + Vite)
+
+This frontend is a minimal, production-clean **Auth slice** that talks to the backend via the **`/api/v1/`** mirror using **session cookies + CSRF**. It provides a guarded application shell (`RequireAuth`) and public auth pages.
+
+### Folder Layout
+
+```
+frontend/
+└─ src/
+   ├─ api/
+   │  ├─ http.ts         # fetch wrapper: base '/api/v1/', credentials: 'include', CSRF header on unsafe
+   │  ├─ auth.ts         # getCsrf, login, logout, me, register?, password reset & change
+   │  └─ auth.test.ts    # unit tests (vitest) for client
+   ├─ auth/
+   │  ├─ AuthContext.tsx # { user, hydrated, refresh, logout } (hydrates on mount via me())
+   │  ├─ RequireAuth.tsx # gate that redirects to /login?next=...
+   │  └─ LogoutButton.tsx# shared logout with CSRF prime, safe navigation
+   ├─ pages/
+   │  ├─ Login.tsx
+   │  ├─ Register.tsx          # shown only if backend registration enabled (403/404 → friendly msg)
+   │  ├─ ForgotPassword.tsx
+   │  ├─ ResetPassword.tsx
+   │  ├─ PasswordChange.tsx    # authenticated
+   │  └─ Home.tsx              # example protected page
+   ├─ test/                # vitest setup and integration tests
+   ├─ App.tsx              # router: public auth routes; protected app routes in <RequireAuth>
+   └─ main.tsx
+```
+
+### Running the Frontend
+
+```bash
+cd frontend
+npm ci
+npm run dev
+# -> http://localhost:5173 (or 5174 if 5173 is busy)
+```
+
+`vite.config.ts` proxies `/api` to `http://127.0.0.1:8000`, preserving cookies:
+
+```ts
+server: {
+  port: 5173,
+  // strictPort: true, // Optional: lock port to avoid CSRF trusted-origin churn
+  proxy: {
+    '/api': {
+      target: 'http://127.0.0.1:8000',
+      changeOrigin: true,
+      cookieDomainRewrite: '', // keep cookies first-party
+    },
+  },
+},
+```
+
+### API Client Conventions
+
+* **Base URL:** `/api/v1/` (v1 mirror).
+* **Credentials:** all requests use `credentials: 'include'`.
+* **CSRF:** Unsafe methods (POST/PATCH/PUT/DELETE) attach `X-CSRFToken` from cookie **csrftoken**.
+* **Errors:** Decode from DRF standard `{ "detail": "...", "code"?: "..." }`; fallback to HTTP status text.
+
+**Endpoints (session-based, CSRF required on unsafe):**
+
+```
+GET  /auth/csrf/                      -> 204 (sets csrftoken cookie)
+POST /auth/login/                     -> 200 {"id","username","email"} (sets session)
+POST /auth/logout/                    -> 204 (clears session)
+GET  /auth/me/                        -> 200 or 401
+
+POST /auth/password/reset/            -> 204
+POST /auth/password/reset/confirm/    -> 204
+POST /auth/password/change/           -> 204
+
+POST /auth/register/                  -> 201/204 (if ENABLE_REGISTRATION=True)
+```
+
+> **Important:** Do not disable CSRF. The frontend first calls `getCsrf()` (or any GET) to receive the cookie, then attaches `X-CSRFToken` for unsafe requests.
+
+### Auth Flow (Pages & Components)
+
+* **Auth Shell**
+
+  * `AuthContext` hydrates on mount via `me()`. Exposes `{ user, hydrated, refresh, logout }`.
+  * `RequireAuth` redirects unauthenticated users to `/login?next=...`.
+  * `AppLayout` header shows `{username}` + unified **Logout** button.
+
+* **Login**
+
+  * Fields: `username`, `password`.
+  * Flow: `await getCsrf()`, `await login()`, `await refresh()` → navigate to `next` or `/`.
+  * Errors:
+
+    * 400/401 → “Invalid username or password.”
+    * 429 → “Too many attempts; please wait.”
+
+* **Register** (optional)
+
+  * Requires email (`username`, `email`, `password1`, `password2`).
+  * If backend returns 403/404, show “Registration is currently disabled.”
+
+* **Forgot/Reset**
+
+  * `POST /auth/password/reset/` → 204.
+  * `POST /auth/password/reset/confirm/` with `{ uid, token, new_password1, new_password2 }` → 204.
+
+* **Password Change** (authenticated)
+
+  * `POST /auth/password/change/` with `{ old_password, new_password1, new_password2 }` → 204.
+
+### Testing (Frontend)
+
+```bash
+cd frontend
+npm test      # vitest
+npm run typecheck
+```
+
+* Unit tests for `src/api/http.ts` and `src/api/auth.ts` (mock fetch).
+* Integration tests for `RequireAuth` & auth pages.
+
+### Common Frontend Pitfalls
+
+* **403 on login/logout/register (CSRF):**
+
+  * Ensure `X-CSRFToken` is sent. In dev, `CSRF_COOKIE_HTTPONLY` must be **False** so the SPA can read `csrftoken`.
+  * Ensure `CSRF_TRUSTED_ORIGINS` includes your dev origin (e.g., `http://localhost:5173` and `http://localhost:5174` if Vite changed ports).
+  * Consider `strictPort: true` in Vite to prevent port drift.
+
+* **Two logout buttons, one fails:**
+
+  * Always use the shared `<LogoutButton />`, which primes CSRF and calls `AuthContext.logout()`.
+
+* **Missing v1 routes:**
+
+  * Frontend must call `/api/v1/`. Confirm the v1 router mirror is mounted.
 
 ---
 
@@ -208,9 +363,9 @@ python manage.py deliver_webhooks
 
 ## Security & Tenancy
 
-* **Authentication**: `SessionAuthentication` with Django sessions.
+* **Authentication**: `SessionAuthentication` (Django sessions).
 * **CSRF**: Required for POST/PUT/PATCH/DELETE. Obtain cookie via GET, then send `X-CSRFToken`.
-* **Tenancy**: All domain models derive from `OwnedModel` (`user`, `created_at`, `updated_at`). Querysets are scoped by `request.user`. Object access is enforced by `core.permissions.IsOwner`.
+* **Tenancy**: Domain models derive from a common owned base (`user`, timestamps). Querysets are scoped by `request.user`. Object access is enforced by a strict owner permission.
 * **Public endpoints**: Only the label public page (`/p/<token>/` and its SVG) is anonymous; responses contain minimal fields.
 
 ---
@@ -302,7 +457,7 @@ Throttled under scope **`wizard-seed`**. Stepwise flow:
   * Without `days`: `{ total_visits, last_7d, last_30d }`
   * With `days` (1–365): adds `{ window_days, start_date, end_date, series:[{date, visits}] }`
 
-**Token privacy**: Raw tokens are never persisted; only a SHA-256 hash and a short prefix are stored. Plants moved to a terminal status (e.g., **SOLD/DEAD/DISCARDED**) automatically revoke/detach the active token.
+**Token privacy**: Raw tokens are never persisted; only a SHA-256 hash and a short prefix are stored. Plants moved to terminal status (e.g., **SOLD/DEAD/DISCARDED**) automatically revoke/detach the active token.
 
 ---
 
@@ -464,7 +619,7 @@ python manage.py deliver_webhooks
 * **Observability** — Request-ID middleware:
 
   * Adds `X-Request-ID` to every response (respects safe client-provided values)
-  * Logs **one** structured line to the `nursery.request` logger, e.g.:
+  * Logs **one** structured line, e.g.:
 
     ```
     level=INFO logger=nursery.request request_id=... method=GET path=/api/taxa/ status=200 user_id=1 duration_ms=23
@@ -483,20 +638,20 @@ python manage.py deliver_webhooks
 * Primary surface: **`/api/`**
 * Mirror: **`/api/v1/`** mounted without code duplication (frozen surface)
 * OpenAPI advertises both; duplicate operation IDs are safely suffixed
+* **Frontend calls `/api/v1/` only**
 
 ---
 
-## Testing
-
-Run the full suite:
+## Testing (Backend)
 
 ```bash
-python manage.py tests -v 2
+python manage.py check
+python manage.py test -v 2
 ```
 
 Coverage includes models (constraints/invariants), auth/ownership, filters & ordering,
 bulk ops, import/export (CSV/JSON), reports, labels & analytics, concurrency, throttling,
-observability, limits, audit logs, and webhook delivery worker behavior.
+observability, limits, audit logs, and webhook worker behavior.
 
 ---
 
@@ -510,25 +665,48 @@ python manage.py migrate
 python manage.py dev_seed --reset --size=MEDIUM
 ```
 
-The developer seed is **idempotent** and creates a small, linked dataset for exploration.
+The developer seed is **idempotent** and creates a linked dataset for exploration.
 Check command output for any sample users it creates.
 
 ---
 
 ## Troubleshooting
 
-* **403 CSRF** — Perform a GET to set cookies; send `X-CSRFToken` on write.
-* **412 Precondition Failed** — Refresh to get the latest `ETag`, then retry with `If-Match`.
-* **404 `/p/<token>/`** — Token was rotated/revoked or unknown; create/rotate a label to get a fresh token.
-* **429 throttling** — Back off or tune throttle env rates.
-* **413 upload** — Increase `MAX_IMPORT_BYTES`, or split files.
-* **OpenAPI quirks** — Custom field/headers are documented via `nursery/schema.py`. When adding new enums or actions, ensure names remain unique.
+* **403 “CSRF Failed” on login/logout/register**
+
+  * Confirm `X-CSRFToken` header is sent for unsafe requests.
+  * In dev, ensure `CSRF_COOKIE_HTTPONLY=False` and `CSRF_TRUSTED_ORIGINS` includes your current Vite port (`5173` and **`5174`** if Vite moved).
+  * Consider `strictPort: true` in `vite.config.ts`.
+* **401/403 on `/auth/me/`**
+
+  * You’re not logged in or session expired. The `AuthContext` treats 401/403 as unauthenticated and redirects via `RequireAuth`.
+* **412 Precondition Failed**
+
+  * ETag mismatch. Refresh resource (GET) and retry write with `If-Match`.
+* **429 Too Many Requests**
+
+  * Throttle exceeded. Back off; see throttle names/rates in settings and `core/throttling.py`.
+* **413 Request Entity Too Large**
+
+  * Increase `MAX_IMPORT_BYTES` or split the file.
+* **Vite started on a different port**
+
+  * Add the origin to `CSRF_TRUSTED_ORIGINS` or lock port via `strictPort: true`.
 
 ---
 
 ## License
 
-MIT (see `LICENSE` if present).
+MIT (if present).
 
-```
-```
+````
+
+Post-Checks:
+- Save this README at the repo root as `README.md`.
+- Verify commands by running:
+  ```bash
+  python manage.py check && python manage.py test
+  cd frontend && npm test && npm run dev
+````
+
+* Open `http://localhost:5173` (or 5174) and confirm the login → protected home → logout flow.
