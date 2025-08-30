@@ -25,12 +25,15 @@ function PanelCard({
   children,
   ariaLabel,
   actions,
+  centerContent = false,
 }: {
   title: string
   className?: string
   children?: React.ReactNode
   ariaLabel?: string
   actions?: React.ReactNode
+  /** When true, vertically & horizontally center the content area. */
+  centerContent?: boolean
 }) {
   return (
     <Box
@@ -63,7 +66,17 @@ function PanelCard({
           {actions}
         </Box>
         <Divider />
-        <Box sx={{ flex: 1, display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
+        <Box
+          sx={{
+            flex: 1,
+            display: 'flex',
+            // Center the content “middle-middle” when requested
+            alignItems: centerContent ? 'center' : 'stretch',
+            justifyContent: 'center',
+            // Ensure the flex child can actually center within remaining space
+            minHeight: 0,
+          }}
+        >
           {children ?? (
             <Typography variant="body2" color="text.secondary" sx={{ m: 'auto' }}>
               Placeholder
@@ -127,10 +140,11 @@ export default function Home() {
         {/* Side panels preserved */}
         <PanelCard className="div3" title="Left Panel" />
 
-        {/* Centered dashboard in the main panel */}
+        {/* Middle panel with centered dashboard */}
         <PanelCard
           className="div1"
           title="Nursery Overview"
+          centerContent
           actions={
             <Tooltip title="Refresh">
               <IconButton aria-label="Refresh dashboard" onClick={load} size="small">
@@ -139,12 +153,14 @@ export default function Home() {
             </Tooltip>
           }
         >
+          {/* Keep the grid constrained and perfectly centered within the panel */}
           <Box
             sx={{
               width: '100%',
-              maxWidth: 1200, // constrain for nicer reading width
-              mx: 'auto',     // center horizontally
-              py: 1,
+              maxWidth: 1200,
+              mx: 'auto',
+              // Prevent extra height from collapsing; allow natural centering
+              // The parent flex box already centers this child.
             }}
           >
             <Grid container spacing={2} justifyContent="center">
