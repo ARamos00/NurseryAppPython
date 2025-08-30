@@ -1,4 +1,3 @@
-````markdown
 # Nursery Tracker — Django/DRF + React/TypeScript (Vite)
 
 A production-grade **Django 5.2 + Django REST Framework 3.16** backend with a lightweight **React + TypeScript (Vite)** frontend shell.
@@ -26,6 +25,14 @@ Track **taxa**, **plant materials**, **propagation batches**, **plants**, **even
   - [Auth Flow (Pages & Components)](#auth-flow-pages--components)
   - [Testing (Frontend)](#testing-frontend)
   - [Common Frontend Pitfalls](#common-frontend-pitfalls)
+- [Frontend (Material UI)](#frontend-material-ui)
+  - [What We Adopted](#what-we-adopted)
+  - [Install & Theme Setup](#install--theme-setup)
+  - [Custom Font Integration](#custom-font-integration)
+  - [Router + MUI Links](#router--mui-links)
+  - [Home Layout & Visual System](#home-layout--visual-system)
+  - [Auth Pages (MUI)](#auth-pages-mui)
+  - [Navigation Bar (MUI AppBar)](#navigation-bar-mui-appbar)
 - [API Docs & URLs](#api-docs--urls)
 - [Security & Tenancy](#security--tenancy)
 - [Domain Model](#domain-model)
@@ -45,6 +52,7 @@ Track **taxa**, **plant materials**, **propagation batches**, **plants**, **even
 - [Testing (Backend)](#testing-backend)
 - [Developer Seed & Reset](#developer-seed--reset)
 - [Troubleshooting](#troubleshooting)
+- [Changelog (Frontend)](#changelog-frontend)
 - [License](#license)
 
 ---
@@ -64,6 +72,7 @@ Track **taxa**, **plant materials**, **propagation batches**, **plants**, **even
 - **Webhooks** — Queue + worker command; HTTPS/signature requirements via env flags.
 - **Throttling** — Global (`user`, `anon`) and named scopes (seed wizard, exports, public labels, imports, reports…).
 - **Observability** — Request-ID middleware logs one structured line per request with latency.
+- **Material UI v7** — Unified theme, AppBar, Grid-friendly cards, and standardized auth forms.
 
 ---
 
@@ -143,7 +152,9 @@ NurseryApp/
    └─ src/
       ├─ api/                       # http.ts + auth.ts (+ tests)
       ├─ auth/                      # AuthContext + RequireAuth + LogoutButton
+      ├─ components/                # NavBar (MUI AppBar)
       ├─ pages/                     # Login, Register, Forgot/Reset, PasswordChange, Home
+      ├─ theme/                     # muiTheme.ts, fonts.css
       ├─ test/                      # Vitest setup & tests
       ├─ App.tsx, main.tsx
       └─ vite.config.ts, tsconfig.json, index.html, package.json
@@ -226,16 +237,12 @@ frontend/
    ├─ auth/
    │  ├─ AuthContext.tsx # { user, hydrated, refresh, logout } (hydrates on mount via me())
    │  ├─ RequireAuth.tsx # gate that redirects to /login?next=...
-   │  └─ LogoutButton.tsx# shared logout with CSRF prime, safe navigation
-   ├─ pages/
-   │  ├─ Login.tsx
-   │  ├─ Register.tsx          # shown only if backend registration enabled (403/404 → friendly msg)
-   │  ├─ ForgotPassword.tsx
-   │  ├─ ResetPassword.tsx
-   │  ├─ PasswordChange.tsx    # authenticated
-   │  └─ Home.tsx              # example protected page
-   ├─ test/                # vitest setup and integration tests
-   ├─ App.tsx              # router: public auth routes; protected app routes in <RequireAuth>
+   │  └─ LogoutButton.tsx# shared logout (MUI Button) with CSRF prime + safe navigation
+   ├─ components/        # NavBar (MUI AppBar), future shared UI
+   ├─ pages/             # Login, Register, ForgotPassword, ResetPassword, PasswordChange, Home
+   ├─ theme/             # muiTheme.ts + fonts.css
+   ├─ test/              # vitest setup and integration tests
+   ├─ App.tsx            # Router: public auth routes; protected app routes under <RequireAuth>
    └─ main.tsx
 ```
 
@@ -248,7 +255,7 @@ npm run dev
 # -> http://localhost:5173 (or 5174 if 5173 is busy)
 ```
 
-`vite.config.ts` proxies `/api` to `http://127.0.0.1:8000`, preserving cookies:
+`vite.config.ts` may proxy `/api` to `http://127.0.0.1:8000` to preserve same-origin cookies:
 
 ```ts
 server: {
@@ -314,6 +321,7 @@ POST /auth/register/                  -> 201/204 (if ENABLE_REGISTRATION=True)
 
   * `POST /auth/password/reset/` → 204.
   * `POST /auth/password/reset/confirm/` with `{ uid, token, new_password1, new_password2 }` → 204.
+  * Forgot flow is **non-enumerating** (always shows “sent”).
 
 * **Password Change** (authenticated)
 
@@ -345,6 +353,118 @@ npm run typecheck
 * **Missing v1 routes:**
 
   * Frontend must call `/api/v1/`. Confirm the v1 router mirror is mounted.
+
+---
+
+## Frontend (Material UI)
+
+### What We Adopted
+
+We standardized the frontend on **Material UI v7** while keeping your routing/auth and CSS Grid layout intact:
+
+* **Theme + CssBaseline** (`src/theme/muiTheme.ts`, `src/main.tsx`)
+* **Custom font** via `@font-face` (`src/theme/fonts.css`), mapped to the theme’s `typography.fontFamily`
+* **NavBar** refactored to a **MUI AppBar** with responsive menu (`src/components/NavBar.tsx`)
+* **Home** boxes refactored to **Box + Paper** with a theme-driven radius rule (`src/pages/Home.tsx`)
+* **Auth pages** (Login, Register, Forgot, Reset, Password Change) converted to MUI primitives
+* **Logout button** refactored to a **MUI Button** with spinner and safe navigation (`src/auth/LogoutButton.tsx`)
+
+> We intentionally deferred Toolpad; current focus is core MUI.
+
+### Install & Theme Setup
+
+```bash
+cd frontend
+npm install @mui/material @emotion/react @emotion/styled @mui/icons-material
+```
+
+Wrap your app:
+
+```tsx
+// src/main.tsx (excerpt)
+import { ThemeProvider, CssBaseline } from '@mui/material'
+import theme from './theme/muiTheme'
+import './theme/fonts.css'
+
+root.render(
+  <ThemeProvider theme={theme}>
+    <CssBaseline />
+    <App />
+  </ThemeProvider>,
+)
+```
+
+Minimal theme scaffold:
+
+```ts
+// src/theme/muiTheme.ts
+import { createTheme } from '@mui/material/styles'
+export default createTheme({
+  shape: { borderRadius: 12 },           // inner radius
+  typography: { fontFamily: 'NIS JTC Win M9, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif' },
+})
+```
+
+### Custom Font Integration
+
+Place your font at:
+
+```
+frontend/fonts/NIS-JTC-Win-M9.ttf
+```
+
+Register it:
+
+```css
+/* src/theme/fonts.css */
+@font-face {
+  font-family: 'NIS JTC Win M9';
+  src: url('../../fonts/NIS-JTC-Win-M9.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+}
+```
+
+The theme now uses this family by default.
+
+### Router + MUI Links
+
+Use React Router links via MUI’s `component` prop:
+
+```tsx
+import { Link as RouterLink } from 'react-router-dom'
+<Button component={RouterLink} to="/settings/password">Password</Button>
+```
+
+### Home Layout & Visual System
+
+We kept your **5×5 CSS Grid** layout in `src/pages/home.css` and moved card visuals to MUI:
+
+* Outer (wireframe) **Box** with:
+
+  * `border: 1px solid`, `borderColor: 'divider'`, `p: 2`
+  * **Rounded rule:** `borderRadius = shape.borderRadius + padding`
+* Inner **Paper** (`variant="outlined"`) with `borderRadius = shape.borderRadius`
+
+This preserves the formula: **outer radius = inner radius + padding** for clean, concentric curves.
+
+### Auth Pages (MUI)
+
+All auth pages now use MUI primitives:
+
+* `Container`, `Box`, `Stack`, `TextField`, `Button`, `Alert`, `Typography`
+* CSRF priming `getCsrf()` remains in a `useEffect` (non-fatal if cookie exists)
+* Status-specific error mapping (400/401/403/429) retained
+* Inputs/buttons disable while pending; keyboard submission remains intact
+
+### Navigation Bar (MUI AppBar)
+
+`src/components/NavBar.tsx`:
+
+* **AppBar + Toolbar** with brand, links, and responsive **Menu** (hamburger on mobile)
+* Right-aligned user display and **MUI Logout button** (spinner, safe redirect to `/login`)
+* Uses `Container maxWidth="lg"` and MUI `sx` for theme-driven styles
 
 ---
 
@@ -586,8 +706,8 @@ Read-only, owner-scoped listing with filters:
 * `GET /api/audit/`
 * Query params: `model`, `action`, and date ranges
 
-Each item includes `model`, `action` (`create|update|delete`), `changes` (two-element `[old,new]`), and request metadata (`request_id`, `actor`, IP, user agent).
-Soft-deletes (archive) are recorded as `delete`.
+Each item includes `model`, `action` (`create|update|delete`), and request metadata (`request_id`, `actor`, IP, user agent`).
+Soft-deletes (archive) are recorded as `delete\`.
 
 ---
 
@@ -677,36 +797,39 @@ Check command output for any sample users it creates.
   * Confirm `X-CSRFToken` header is sent for unsafe requests.
   * In dev, ensure `CSRF_COOKIE_HTTPONLY=False` and `CSRF_TRUSTED_ORIGINS` includes your current Vite port (`5173` and **`5174`** if Vite moved).
   * Consider `strictPort: true` in `vite.config.ts`.
+
 * **401/403 on `/auth/me/`**
 
   * You’re not logged in or session expired. The `AuthContext` treats 401/403 as unauthenticated and redirects via `RequireAuth`.
+
 * **412 Precondition Failed**
 
   * ETag mismatch. Refresh resource (GET) and retry write with `If-Match`.
+
 * **429 Too Many Requests**
 
   * Throttle exceeded. Back off; see throttle names/rates in settings and `core/throttling.py`.
+
 * **413 Request Entity Too Large**
 
   * Increase `MAX_IMPORT_BYTES` or split the file.
+
 * **Vite started on a different port**
 
   * Add the origin to `CSRF_TRUSTED_ORIGINS` or lock port via `strictPort: true`.
 
 ---
 
-## License
+## Changelog (Frontend)
 
-MIT (if present).
+**Latest**
 
-````
+* Adopted **Material UI v7** with theme + CssBaseline
+* Mapped **custom font** (`frontend/fonts/NIS-JTC-Win-M9.ttf`) via `@font-face` and `typography.fontFamily`
+* Replaced header with **MUI AppBar** (`src/components/NavBar.tsx`) + responsive menu
+* Refactored **LogoutButton** to **MUI Button** with spinner and safe redirect
+* Converted **Login, Register, Forgot Password, Reset Password, Password Change** to MUI primitives
+* Migrated **Home** boxes to **Box + Paper** while keeping the CSS Grid; enforced **outer radius = inner radius + padding** via theme
+* Kept routes and backend flows unchanged (SessionAuth + CSRF; `/api/v1/`)
 
-Post-Checks:
-- Save this README at the repo root as `README.md`.
-- Verify commands by running:
-  ```bash
-  python manage.py check && python manage.py test
-  cd frontend && npm test && npm run dev
-````
-
-* Open `http://localhost:5173` (or 5174) and confirm the login → protected home → logout flow.
+---
