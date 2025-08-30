@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../auth/AuthContext'
+import { useAuth } from './AuthContext'
 import * as api from '../api/auth'
 
 type Props = { children?: React.ReactNode; className?: string }

@@ -1,5 +1,5 @@
-import React, { useCallback } from 'react'
-import { BrowserRouter, Route, Routes, Navigate, Link, useNavigate } from 'react-router-dom'
+import React from 'react'
+import { BrowserRouter, Route, Routes, Navigate, Link } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 
@@ -10,19 +10,11 @@ import RegisterPage from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import PasswordChangePage from './pages/PasswordChange'
+import LogoutButton from './auth/LogoutButton'
 
-// Minimal app layout with account section; keep it simple and framework-agnostic.
+// Minimal app layout with account section
 function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth()
-  const nav = useNavigate()
-
-  const onLogout = useCallback(async () => {
-    try {
-      await logout()
-    } finally {
-      nav('/login', { replace: true })
-    }
-  }, [logout, nav])
+  const { user } = useAuth()
 
   return (
     <div>
@@ -39,7 +31,6 @@ function AppLayout({ children }: { children: React.ReactNode }) {
           <Link to="/" style={{ textDecoration: 'none', fontWeight: 600 }}>
             Nursery Tracker
           </Link>
-          {/* Add more app links here as you build features */}
           <Link to="/settings/password">Password</Link>
         </nav>
         <div>
@@ -48,9 +39,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
               <span title={user.email} style={{ fontSize: 14, color: '#374151' }} aria-live="polite">
                 {user.username}
               </span>
-              <button type="button" onClick={onLogout} aria-label="Log out">
-                Log out
-              </button>
+              <LogoutButton />
             </div>
           )}
         </div>
@@ -93,7 +82,7 @@ export default function App() {
             }
           />
 
-          {/* Catch-all: send unknown routes to root; RequireAuth will gate if needed */}
+          {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
