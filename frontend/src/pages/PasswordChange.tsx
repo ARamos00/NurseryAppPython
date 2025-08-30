@@ -1,4 +1,13 @@
 import React, { FormEvent, useCallback, useEffect, useState } from 'react'
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material'
 import * as api from '../api/auth'
 import { useAuth } from '../auth/AuthContext'
 
@@ -11,12 +20,9 @@ export default function PasswordChangePage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Prime CSRF cookie; ignore if already present.
   useEffect(() => {
-    ;(async () => {
-      try {
-        await api.getCsrf()
-      } catch { /* ignore */ }
-    })()
+    void api.getCsrf().catch(() => {})
   }, [])
 
   const onSubmit = useCallback(async (e: FormEvent) => {
@@ -41,26 +47,65 @@ export default function PasswordChangePage() {
   }, [oldPassword, new1, new2])
 
   return (
-    <main style={{ maxWidth: 420, margin: '4rem auto', padding: '1rem' }}>
-      <h1>Change password</h1>
-      <p style={{ marginTop: 4 }}>Signed in as <strong>{user?.username}</strong></p>
-      <form onSubmit={onSubmit} noValidate>
-        <label htmlFor="old">Current password</label>
-        <input id="old" type="password" value={oldPassword} onChange={(e) => setOld(e.target.value)} required disabled={loading} />
+    <Container maxWidth="sm">
+      <Box component="main" sx={{ mt: 8 }}>
+        <Typography variant="h5" fontWeight={700} gutterBottom>
+          Change password
+        </Typography>
+        <Typography sx={{ mb: 2 }}>
+          Signed in as <strong>{user?.username}</strong>
+        </Typography>
 
-        <label htmlFor="new1" style={{ display: 'block', marginTop: 8 }}>New password</label>
-        <input id="new1" type="password" value={new1} onChange={(e) => setNew1(e.target.value)} required disabled={loading} />
+        {msg && (
+          <Alert severity="success" sx={{ mb: 2 }} role="status">
+            {msg}
+          </Alert>
+        )}
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }} role="alert">
+            {error}
+          </Alert>
+        )}
 
-        <label htmlFor="new2" style={{ display: 'block', marginTop: 8 }}>Confirm new password</label>
-        <input id="new2" type="password" value={new2} onChange={(e) => setNew2(e.target.value)} required disabled={loading} />
-
-        {msg && <p role="status" style={{ color: 'green' }}>{msg}</p>}
-        {error && <p role="alert" style={{ color: 'crimson' }}>{error}</p>}
-
-        <button type="submit" disabled={loading} style={{ marginTop: 12 }}>
-          {loading ? 'Saving…' : 'Save'}
-        </button>
-      </form>
-    </main>
+        <Box component="form" onSubmit={onSubmit} noValidate>
+          <Stack spacing={2}>
+            <TextField
+              id="old"
+              label="Current password"
+              type="password"
+              value={oldPassword}
+              onChange={(e) => setOld(e.target.value)}
+              required
+              disabled={loading}
+              fullWidth
+              autoFocus
+            />
+            <TextField
+              id="new1"
+              label="New password"
+              type="password"
+              value={new1}
+              onChange={(e) => setNew1(e.target.value)}
+              required
+              disabled={loading}
+              fullWidth
+            />
+            <TextField
+              id="new2"
+              label="Confirm new password"
+              type="password"
+              value={new2}
+              onChange={(e) => setNew2(e.target.value)}
+              required
+              disabled={loading}
+              fullWidth
+            />
+            <Button type="submit" variant="contained" disabled={loading}>
+              {loading ? 'Saving…' : 'Save'}
+            </Button>
+          </Stack>
+        </Box>
+      </Box>
+    </Container>
   )
 }

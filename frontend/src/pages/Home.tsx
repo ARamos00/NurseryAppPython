@@ -1,11 +1,13 @@
-import React from 'react'
+import * as React from 'react'
+import { Box, Paper, Typography } from '@mui/material'
 import './home.css'
 
 /**
- * Simple structural box with an outer container and an inner panel.
- * The CSS ensures: outerRadius = innerRadius + padding (see home.css).
+ * PanelCard
+ * Outer Box: wireframe container whose borderRadius = innerRadius + padding
+ * Inner Paper: outlined panel using theme.shape.borderRadius
  */
-function Box({
+function PanelCard({
   title,
   className,
   children,
@@ -17,16 +19,41 @@ function Box({
   ariaLabel?: string
 }) {
   return (
-    <section className={`card ${className ?? ''}`} aria-label={ariaLabel ?? title}>
-      <div className="card__inner">
-        <header className="card__header">
-          <h2 className="card__title">{title}</h2>
-        </header>
-        <div className="card__body">
-          {children ?? <p className="muted">Placeholder</p>}
-        </div>
-      </div>
-    </section>
+    <Box
+      className={className}
+      aria-label={ariaLabel ?? title}
+      sx={(t) => ({
+        p: 2,
+        border: '1px solid',
+        borderColor: 'divider',
+        bgcolor: 'background.default',
+        borderRadius: `calc(${t.shape.borderRadius}px + ${t.spacing(2)})`,
+      })}
+    >
+      <Paper
+        variant="outlined"
+        sx={(t) => ({
+          p: 2,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          borderRadius: t.shape.borderRadius,
+          bgcolor: 'background.paper',
+        })}
+      >
+        <Typography variant="subtitle1" fontWeight={600}>
+          {title}
+        </Typography>
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {children ?? (
+            <Typography variant="body2" color="text.secondary">
+              Placeholder
+            </Typography>
+          )}
+        </Box>
+      </Paper>
+    </Box>
   )
 }
 
@@ -34,11 +61,11 @@ export default function Home() {
   return (
     <main className="grid-page">
       <div className="parent" role="grid" aria-label="Home layout grid">
-        {/* New layout (no nav content inside the page) */}
-        <Box className="div3" title="Left Panel" />
-        <Box className="div1" title="Main Panel" />
-        <Box className="div4" title="Right Panel" />
-        <Box className="div2" title="Footer" />
+        {/* Updated four-area layout (no nav content in page) */}
+        <PanelCard className="div3" title="Left Panel" />
+        <PanelCard className="div1" title="Main Panel" />
+        <PanelCard className="div4" title="Right Panel" />
+        <PanelCard className="div2" title="Footer" />
       </div>
     </main>
   )

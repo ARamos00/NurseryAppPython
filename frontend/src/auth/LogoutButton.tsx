@@ -1,11 +1,32 @@
-import React, { useCallback, useState } from 'react'
+import * as React from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Button, CircularProgress } from '@mui/material'
+import LogoutIcon from '@mui/icons-material/Logout'
 import { useAuth } from './AuthContext'
 import * as api from '../api/auth'
 
-type Props = { children?: React.ReactNode; className?: string }
+type Props = {
+  children?: React.ReactNode
+  className?: string
+  /** Optional styling controls if you want to override defaults at call sites */
+  size?: 'small' | 'medium' | 'large'
+  variant?: 'text' | 'outlined' | 'contained'
+}
 
-export default function LogoutButton({ children = 'Log out', className }: Props) {
+/**
+ * LogoutButton — MUI version (preserves existing behavior)
+ * Flow:
+ *   1) Ensure CSRF cookie is fresh (unsafe POSTs require it)
+ *   2) Call useAuth().logout()
+ *   3) Navigate to /login in finally (always), then clear pending
+ */
+export default function LogoutButton({
+  children = 'Log out',
+  className,
+  size = 'small',
+  variant = 'outlined',
+}: Props) {
   const { logout } = useAuth()
   const nav = useNavigate()
   const [pending, setPending] = useState(false)
@@ -14,25 +35,36 @@ export default function LogoutButton({ children = 'Log out', className }: Props)
     if (pending) return
     setPending(true)
     try {
-      // Ensure CSRF cookie is fresh before unsafe POST
       await api.getCsrf()
       await logout()
     } finally {
-      setPending(false)
+      // Preserve original semantics: always go to the login page after attempting logout
       nav('/login', { replace: true })
+      setPending(false)
     }
   }, [logout, nav, pending])
 
   return (
-    <button
+    <Button
       type="button"
       onClick={onClick}
       disabled={pending}
       aria-busy={pending || undefined}
-      className={className}
       aria-label="Log out"
+      className={className}
+      size={size}
+      variant={variant}
+      startIcon={!pending ? <LogoutIcon /> : undefined}
+      sx={{ textTransform: 'none' }}
     >
-      {children}
-    </button>
+      {pending ? (
+        <>
+          <CircularProgress size={16} sx={{ mr: 1 }} />
+          Signing out…
+        </>
+      ) : (
+        children
+      )}
+    </Button>
   )
 }

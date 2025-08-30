@@ -1,6 +1,15 @@
 import React, { FormEvent, useCallback, useEffect, useState } from 'react'
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material'
+import { Link as RouterLink } from 'react-router-dom'
 import * as api from '../api/auth'
-import { Link } from 'react-router-dom'
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('')
@@ -8,8 +17,9 @@ export default function ForgotPassword() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Prime CSRF cookie; ignore if already present.
   useEffect(() => {
-    void api.getCsrf() // prime CSRF; ignore errors
+    void api.getCsrf().catch(() => {})
   }, [])
 
   const onSubmit = useCallback(async (e: FormEvent) => {
@@ -18,7 +28,8 @@ export default function ForgotPassword() {
     setError(null)
     try {
       await api.requestPasswordReset(email.trim())
-      setSent(true) // always true (non-enumerating)
+      // Non-enumerating response: always show "sent"
+      setSent(true)
     } catch (err: any) {
       if (err?.status === 429) setError('Too many attempts; please wait a moment.')
       else setError('Something went wrong. Please try again.')
@@ -28,34 +39,50 @@ export default function ForgotPassword() {
   }, [email])
 
   return (
-    <main style={{ maxWidth: 420, margin: '4rem auto', padding: '1rem' }}>
-      <h1>Forgot your password?</h1>
-      {sent ? (
-        <>
-          <p>We’ve sent password reset instructions if that email exists in our system.</p>
-          <p style={{ marginTop: 12 }}>
-            <Link to="/login">Return to sign in</Link>
-          </p>
-        </>
-      ) : (
-        <form onSubmit={onSubmit}>
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={loading}
-            required
-          />
-          {error && <p role="alert" style={{ color: 'crimson' }}>{error}</p>}
-          <button type="submit" disabled={loading} style={{ marginTop: 12 }}>
-            {loading ? 'Sending…' : 'Send reset link'}
-          </button>
-        </form>
-      )}
-    </main>
+    <Container maxWidth="xs">
+      <Box component="main" sx={{ mt: 8 }}>
+        <Typography variant="h5" fontWeight={700} gutterBottom>
+          Forgot your password?
+        </Typography>
+
+        {sent ? (
+          <Stack spacing={2}>
+            <Typography>
+              If that email exists in our system, we’ve sent password reset instructions.
+            </Typography>
+            <Button component={RouterLink} to="/login" variant="text" size="small" sx={{ textTransform: 'none' }}>
+              Return to sign in
+            </Button>
+          </Stack>
+        ) : (
+          <>
+            {error && (
+              <Alert severity="error" sx={{ mb: 2 }} role="alert">
+                {error}
+              </Alert>
+            )}
+            <Box component="form" onSubmit={onSubmit} noValidate>
+              <Stack spacing={2}>
+                <TextField
+                  id="email"
+                  label="Email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={loading}
+                  required
+                  fullWidth
+                  autoFocus
+                />
+                <Button type="submit" variant="contained" disabled={loading}>
+                  {loading ? 'Sending…' : 'Send reset link'}
+                </Button>
+              </Stack>
+            </Box>
+          </>
+        )}
+      </Box>
+    </Container>
   )
 }
