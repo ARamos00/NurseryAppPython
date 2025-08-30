@@ -1,0 +1,12 @@
+/* Registers your local font so it can be used by the MUI theme.
+   The path below assumes your file is located at:
+   frontend/fonts/NIS-JTC-Win-M9.ttf
+   If you move it later, update the url() accordingly.
+*/
+@font-face {
+  font-family: 'NIS JTC Win M9';
+  src: url('../fonts/NIS-JTC-Win-M9.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 300 900; /* allow a range of weights if the font supports it */
+  font-display: swap;
+}
