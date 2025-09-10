@@ -1,5 +1,3 @@
----
-
 # Nursery Tracker — Django/DRF + React/TypeScript (Vite)
 
 Production-grade **Django 5.2 + DRF 3.16** API with a lightweight **React + TypeScript (Vite)** frontend.
